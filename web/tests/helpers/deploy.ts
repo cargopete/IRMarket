@@ -46,6 +46,7 @@ export interface DeployedContracts {
   market: Address;
   baseToken: Address;
   quoteToken: Address;
+  vault: Address;
 }
 
 const ACCOUNT_0_PK =
@@ -80,11 +81,12 @@ const approveABI = [
 
 const oracleABI = loadArtifact("MonoracleMock").abi;
 const irMarketABI = loadArtifact("IRMarket").abi;
+const vaultABI = loadArtifact("IRMarketVault").abi;
 
 const submitQuoteFn = oracleABI.find((f: any) => f.name === "submitQuote") as any;
 
 export async function deployContracts(): Promise<DeployedContracts> {
-  const transport = http("http://localhost:8545");
+  const transport = http("http://127.0.0.1:8545");
 
   const publicClient = createPublicClient({
     chain: anvil,
@@ -167,16 +169,32 @@ export async function deployContracts(): Promise<DeployedContracts> {
     args: [marketAddr, maxUint256],
   });
 
+  const vaultHash = await walletClient.deployContract({
+    abi: vaultABI,
+    bytecode: loadArtifact("IRMarketVault").bytecode as Hex,
+    args: [oracleAddr, baseTokenAddr, quoteTokenAddr, 100n],
+  });
+  const vaultReceipt = await publicClient.waitForTransactionReceipt({ hash: vaultHash });
+  const vaultAddr = vaultReceipt.contractAddress!;
+
+  await walletClient.writeContract({
+    address: quoteTokenAddr,
+    abi: approveABI,
+    functionName: "approve",
+    args: [vaultAddr, maxUint256],
+  });
+
   console.log(`Deployed Monoracle: ${oracleAddr}`);
   console.log(`Deployed IRMarket:         ${marketAddr}`);
   console.log(`Deployed BASE:             ${baseTokenAddr}`);
   console.log(`Deployed QUOTE:            ${quoteTokenAddr}`);
+  console.log(`Deployed VAULT:            ${vaultAddr}`);
 
-  return { oracle: oracleAddr, market: marketAddr, baseToken: baseTokenAddr, quoteToken: quoteTokenAddr };
+  return { oracle: oracleAddr, market: marketAddr, baseToken: baseTokenAddr, quoteToken: quoteTokenAddr, vault: vaultAddr };
 }
 
 export async function createMarket(deployed: DeployedContracts): Promise<string> {
-  const transport = http("http://localhost:8545");
+  const transport = http("http://127.0.0.1:8545");
   const publicClient = createPublicClient({ chain: anvil, transport });
   const walletClient = createWalletClient({
     chain: anvil,
@@ -229,7 +247,7 @@ export async function seedQuote(params: {
   quoteAmount: bigint;
   expiryBlocks: number;
 }): Promise<bigint> {
-  const transport = http("http://localhost:8545");
+  const transport = http("http://127.0.0.1:8545");
   const publicClient = createPublicClient({ chain: anvil, transport });
   const walletClient = createWalletClient({
     chain: anvil,
