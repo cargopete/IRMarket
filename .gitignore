@@ -57,3 +57,5 @@ irmarket_run.log
 irmarket_*.log
 docs/audit/agent_logs/*
 !docs/audit/agent_logs/.gitkeep
+# bot runtime logs
+bot_run.*.log
