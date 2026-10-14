@@ -84,13 +84,14 @@ function checkRepoAbis() {
 
 async function checkOracles(provider) {
   console.log("\n== on-chain oracles ==");
-  const args = process.argv.slice(2).filter((a) => /^0x[0-9a-fA-F]{40}$/.test(a));
-  if (process.env.ORACLE_ADDRESS) args.push(process.env.ORACLE_ADDRESS);
-  if (process.env.NEXT_PUBLIC_ORACLE_ADDRESS) args.push(process.env.NEXT_PUBLIC_ORACLE_ADDRESS);
-  const addrs = args.length ? args : Object.keys(KNOWN);
+  const cli = process.argv.slice(2).filter((a) => /^0x[0-9a-fA-F]{40}$/.test(a));
+  const env = [process.env.ORACLE_ADDRESS, process.env.NEXT_PUBLIC_ORACLE_ADDRESS].filter(Boolean);
+  const configured = [...new Set([...cli, ...env].map((a) => a.toLowerCase()))];
+  const list = configured.length ? configured : Object.keys(KNOWN);
   const repoBuild = shape(loadAbi("abi/Monoracle.abi.json")).submitSig === EXPECTED_SUBMIT_SIG ? "A" : "B";
+  if (!configured.length) console.log("  (no configured oracle; listing known deployments — informational)");
 
-  for (const raw of [...new Set(addrs.map((a) => a.toLowerCase()))]) {
+  for (const raw of list) {
     const addr = ethers.getAddress(raw);
     const code = (await provider.getCode(addr)).toLowerCase();
     if (code === "0x" || code === "") { console.log(`  ${addr}  (no code)`); continue; }
@@ -98,8 +99,9 @@ async function checkOracles(provider) {
     const vs = has(SIG.vs), sub32 = has(SIG.sub32), sub256 = has(SIG.sub256);
     const kind = vs && sub32 ? "A" : sub256 && !vs ? "B" : "unknown";
     const matches = repoBuild === kind;
-    console.log(`  ${addr}${KNOWN[raw] ? `  (${KNOWN[raw]})` : ""}  -> ${kind}  | repo ABI(${repoBuild}) matches: ${matches ? "YES" : "NO  <-- migrate the oracle, do NOT hand-patch the ABI"}`);
-    if (!matches) drift = true;
+    const enforced = configured.includes(raw);
+    console.log(`  ${addr}${KNOWN[raw] ? `  (${KNOWN[raw]})` : ""}  -> ${kind}  | repo ABI(${repoBuild}) matches: ${matches ? "YES" : "NO"}${enforced ? "  <-- configured oracle MUST match" : "  (informational)"}`);
+    if (enforced && !matches) drift = true;
   }
 }
 
