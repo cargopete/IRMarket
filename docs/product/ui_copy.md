@@ -223,3 +223,33 @@ with this doc when adding or editing screens.
 |-----|------|
 | Title | IRMarket — Exotic Option Market on Monad |
 | Description | Exotic options on any priced asset (A-share stocks, Labubu, ...) with Monoracle-style veto-arbitrage settlement on Monad. |
+
+## Vault — LP pool (`src/app/vault/page.tsx` + `src/components/vault/*`) 〔V1.0〕
+
+| Key | Copy |
+|-----|------|
+| Page heading | LP Vault |
+| Page subline | The pool is the counterparty · positions settle at Monoracle's canonical price · no liquidations |
+| Not-configured fallback | Vault not configured (set NEXT_PUBLIC_VAULT_ADDRESS). |
+| Price header label | Canonical settlement price |
+| Price unavailable | Price unavailable |
+| Price-unavailable note | Trading and settlement previews are disabled until a trustworthy price exists — the vault would revert PriceUnavailable. |
+| Price-header caption | settlement = Monoracle canonical price (price only, not the venue) |
+| Demo banner title | Demo — MVP mechanics, not production-safe |
+| Demo banner items | Manipulable price — settlement uses the raw canonical Monoracle price; anyone can move it with a tiny quote. V1's PriceAdapter (bond floor / freshness / circuit breaker) fixes this. · No early close — a position can only be settled after its expiry block. · No refund — if no valid price exists at or after expiry, the position stays stuck until one appears. · Settlement optionality — settlePosition marks at the price at call time (American-option-like), not at expiry. · Deposit dilution — deposits while positions are open mint shares at the dipped equity, so they buy at a discount and harvest the recovery. · Overflow can strand a position — a pathological price/amount reverts the payout; a bounded grief, not a solvency break. |
+| Banner link text | LP pool tech spec (§1.4, §9) |
+| Tabs | LP · Trade · Positions |
+| LP — Pool cards | Equity · Share price · Total shares · Pool balance · Pending payouts · Your shares |
+| Dilution warning | LP equity is reserving worst-case payouts; your share price will recover as positions settle. Depositing now buys at a discount. |
+| Deposit label | Amount (HKD) → Approve → Deposit; success: Deposit confirmed |
+| Withdraw labels | Shares · Max · You receive: · Your shares: · Withdraw; success: Withdrawal confirmed |
+| Trade header caption | Capped linear payoff · max loss = premium · no liquidations |
+| Tenor presets | 1 min ≈ 200 · 3 min ≈ 600 · 10 min ≈ 2000 |
+| Trade preview rows | Entry price · Fee · Notional N · Max payout (2N) · Units (informational) · Max loss = premium (D) · Max profit = N |
+| Open button | Approve → Open LONG / Open SHORT; blocked when price missing: Waiting for a trustworthy price. |
+| Open success | Position opened |
+| Positions — aggregate | Open PnL (estimated at current price) |
+| Positions — card rows | Deposit · Notional · Entry price · Expiry · Estimated payout at current price · Estimated PnL (OPEN) / Realized payout · Realized PnL (SETTLED) |
+| Settle button | Settle / Settling…; success: Position settled |
+| Settle footnote | Live payout is estimated at the current canonical price. Settle is permissionless — anyone can call it, but the payout always goes to the owner. |
+| Empty states | Connect a wallet to deposit, withdraw, or open positions. · Connect a wallet to open a position. · Connect a wallet to view your vault positions. · No vault positions yet — open a LONG or SHORT from the Trade tab. |

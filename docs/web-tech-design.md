@@ -59,7 +59,8 @@ Contract facts that constrain the UI:
 
 ### 1.3 Source of truth
 
-- Product + UI flow: `docs/prd.md` (V0.8)
+- Product + UI flow: `docs/prd.md` (V0.8) — LP Vault requirements added in §十一 (V1.0)
+- LP Vault frontend design & as-built spec: `docs/design/lp-pool-frontend-design.md`
 - On-chain vocab & fee/window semantics: `docs/sc-tech-spec.md` (V0.9)
 - **UI copy: `docs/product/ui_copy.md`** — the canonical English strings for every screen.
   Components reference these exact strings; do not introduce ad-hoc wording.
@@ -97,6 +98,10 @@ Unchanged Ethereum tooling, with Monad-specific behaviors encoded: gas is charge
                             route — marketId via query param `?m=<marketId>`, Q1-A;
                             optional `&side=long|short` pre-selects the side tab)
 /positions                  positions (derived from veto + VetoWrapped events)
+/vault                      〔V1.0〕LP Vault — LP / Trade / Positions tabs; canonical price
+                            header + MVP-limitations banner (design & as-built spec:
+                            `docs/design/lp-pool-frontend-design.md`; requirements:
+                            `docs/prd.md` §十一)
 ```
 
 Markets are per-`marketId` (each `createMarket` mints a new id, **no pair dedup**, D-14); a
@@ -116,14 +121,16 @@ src/
 │  ├─ page.tsx               # market list (hero + cards + faucet)
 │  ├─ trade/page.tsx         # detail + trading panel (static route, `?m=` + `&side=`)
 │  └─ positions/page.tsx     # event-derived positions (tabs open/settled)
+│  └─ vault/page.tsx         # 〔V1.0〕LP Vault (tabs LP/Trade/Positions; PriceHeader + DemoBanner)
 ├─ components/
-│  ├─ layout/AppShell.tsx    # header nav (Market/Positions) + wallet + faucet entry
+│  ├─ layout/AppShell.tsx    # header nav (Market/Positions/Vault) + wallet + faucet entry
 │  ├─ wallet/                # WalletButton, NetworkBadge
-│  ├─ faucet/FaucetModal.tsx # one-click LLM+HKD mint
+│  ├─ faucet/FaucetModal.tsx # one-click mint (config-driven tokens; NVDA+HKD in the vault era)
 │  ├─ market/                # MarketCard, BlockCountdown
 │  ├─ trade/TradePanel.tsx   # QuoteCard + Long/Short tabs + preview + order button
 │  ├─ position/              # PositionCard, ClosePanel (reverse close)
-│  └─ common/                # Logo, TxStatusCard (loading/success/fail + error map)
+│  ├─ vault/                 # 〔V1.0〕LPPanel, VaultTradePanel, VaultPositionsList, PriceHeader, DemoBanner
+│  └─ common/                # Logo, TxStatusCard (loading/success/fail + error map incl. vault reverts)
 ├─ hooks/
 │  ├─ useMarkets.ts          # react-query: markets registry + active-first sort + demo fallback
 │  ├─ useQuotes.ts           # trailing-window ACTIVE quotes poll (4s), new via nextQuoteId
@@ -133,13 +140,18 @@ src/
 │  ├─ useCurrentBlock.ts     # useBlockNumber({watch}) for countdowns
 │  ├─ useHydrated.ts         # hydration-safe mount flag (useSyncExternalStore)
 │  └─ useTrade.ts            # approve → openLong/openShort/close + gas constants
+│  ├─ useVault.ts            # 〔V1.0〕vault meta/stats + canonical price
+│  ├─ useVaultPositions.ts   # 〔V1.0〕positionCount + positions(i), owner filter
+│  ├─ useVaultTrade.ts       # 〔V1.0〕approve/deposit/withdraw/open/settle writes
+│  └─ useVaultSettled.ts     # 〔V1.0〕PositionSettled log scan (realized payout)
 ├─ lib/
-│  ├─ config.ts              # env, addresses, isFullyConfigured/hasWrapper, explorer URLs
+│  ├─ config.ts              # env, addresses (incl. VAULT_ADDRESS/hasVault), explorer URLs
 │  ├─ market.ts              # derived read params (oracle ABI + pair)
-│  ├─ wagmi.ts               # chain/config (Monad testnet 10143)
-│  ├─ format.ts              # 1e18 fixed-point → display, fee math, countdown
+│  ├─ wagmi.ts               # chain/config (Monad testnet 10143; Multicall3 at 0xcA11…CA11)
+│  ├─ format.ts              # 1e18 fixed-point → display, fee math, countdown, parseAmount
+│  ├─ vault.ts               # 〔V1.0〕pure vault math (payoff/pnl/shares; node --test unit suite)
 │  ├─ types.ts               # Market/Quote/Position/PriceState
-│  └─ abis/                  # oracle.ts, market.ts, Monoracle.json
+│  └─ abis/                  # oracle.ts, market.ts, Monoracle.json, vault.ts
 ```
 
 ### 3.3 ABI & addresses

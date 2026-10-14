@@ -164,7 +164,7 @@ describe("IRMarketVault — MVP LP pool", function () {
   });
 
   // ==================================================================
-  // M5 — hardening (lp-pool-mvp-impl-plan §5.2)
+  // M5 — hardening (tech-spec §14 / §1.4 risks)
   // ==================================================================
 
   describe("M5 — payoff boundaries", function () {

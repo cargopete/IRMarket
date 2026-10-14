@@ -1,5 +1,10 @@
 # Live Demo: IRMarket — 5 Minutes (Veto-Market V0.9)
 
+> **〔V1.0〕** This is the **V0.9 veto-market** demo. The LP-pool (Vault) demo lives in
+> **`DEMO_LP_VAULT.md`** (video: `videos/lp-vault-user-flow.webm`). The quote bot now
+> serves **multiple assets** (NVDA / GLM / SNDK / DEEPSEEK vs HKD — assets-file driven);
+> the vault pool is wired to **NVDA/HKD**.
+
 > **Narrative:** 溜溜梅 (06658.HK / HKG:6658) is "hot" — LLM is trading at **130 HKD**.
 > IRMarket runs a live option round on Monad testnet where every trade IS a
 > Monoracle veto-arbitrage: bilateral collateral backs every quote, and any wallet

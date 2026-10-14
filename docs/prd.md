@@ -1,6 +1,8 @@
-# IRMarket 产品需求与UI设计全文档（V0.8.1 Veto-Market 架构版）
+# IRMarket 产品需求与UI设计全文档（V0.8.1 Veto-Market + V1.0 LP-Vault 架构版）
 
 > 本文档合并产品需求规格（PRD）与UI交互流程（UI Flow），用于整体逻辑评审、链路校验与落地对齐。
+>
+> **V1.0 变更说明**：在 V0.9 veto-market **之上新增（并行、不替代）LP 资金池模式**——资金池作为对手方为交易者承接 capped-linear 多空头寸，到期按 Monoracle canonical price 结算（详见 §十一）。MVP 已实现（`contracts/IRMarketVault.sol` + 前端 `/vault`），实现规格见 `docs/design/lp-pool-frontend-design.md`，合约设计见 `docs/design/lp-pool-tech-spec.md`。
 >
 > **V0.8 变更说明**：按用户对 Monoracle 机制的深度澄清，**推翻了 V0.6/V0.7 的"IRMarket 自有资金池 + 线性合约"模型**，重构为 **Veto-Market 架构**：交易层 = Monoracle 报价否决流本身（"看多/看跌 = price verification 套利"），IRMarket 退化为薄层（市场工厂 / 持仓索引 / 费用包裹，demo 可省）。
 >
@@ -53,6 +55,14 @@
 | R18 | §四 | wrapper 不限制报价来源（任何 provider 的报价可 veto，费用仍归注册 MM） | 用户 B10 选 b |
 | R19 | §二/§四 | 手续费统一按 HKD（quote）计：`feeBps × quoteAmount / 10000`；看涨加在付入端、看跌从收付出扣 | 用户 B11："按 quote 收取更好理解" |
 
+### V0.8.1 → V1.0（LP Vault 资金池回归，MVP 已实现）
+
+| # | 位置 | 修改 | 原因 |
+|---|------|------|------|
+| R20 | §〇/§三/§十一 | **资金池模式回归（并行、不替代 V0.9）**：IRMarket 本体保持薄层；新增独立合约 `IRMarketVault` —— 资金池作为对手方。V0.9 交易 = veto（bot 为对手方）；LP pool 交易 = vault 持仓（池为对手方），Monoracle 在两条路径中都**只承担价格**。部署上有意复用同一 oracle/tokens 栈，两条路径并存于同一站点 | 恢复 grant 承诺"资金池作为对手方"；两套语义各有利弊，并存由用户选择（✅ D-17） |
+| R21 | §十一 | **单资产池**：vault 只托管结算资产（settlementToken = HKD）；priceBase（NVDA）仅为 Monoracle 报价对的 pair key，**永不被池持有/转移**；所有出入金、权金、赔付、equity 全部以 settlementToken 计 | 用户："LP pool 就是单资产池；oracle 用两个资产只是为了表达价格" |
+| R22 | §1.2/§六/§十一 | **标的多资产化演示**：bot 按 assets 配置轮换报价 NVDA/GLM/SNDK/DEEPSEEK vs HKD（各为独立 LP-vault 候选市场）；demo 与 vault 主打 **NVDA/HKD**（faucet 与 vault 的 priceBase = NVDA） | 多标的自选是产品需求（D-14 不去重语义的延伸）；vault 作为单资产版本先行 |
+
 ---
 
 ## 〇、Monoracle 机制速览（认知基线）
@@ -100,11 +110,13 @@ Monoracle 是一个"**报价 + 免许可否决仲裁**"的链上价格市场，*
 
 ### 1.1 产品定位
 
-IRMarket 是部署在 Monad 区块链上的**奇异标的链上多空市场**：任何有公开价格的资产（A 股/港股现货、Labubu 等）都可以成为交易标的。底层直接复用 **Monoracle 否决-套利原语**——bot 持续对标的报价，用户以「看涨/看跌」直接参与价格验证（否决套利），盈亏在套利换手中当场实现。全程无链下预言机、无中心化结算节点、无资金池。
+IRMarket 是部署在 Monad 区块链上的**奇异标的链上多空市场**：任何有公开价格的资产（A股/港股现货、Labubu 等）都可以成为交易标的。底层直接复用 **Monoracle 否决-套利原语**——bot 持续对标的报价，用户以「看涨/看跌」直接参与价格验证（否决套利），盈亏在套利换手中当场实现。全程无链下预言机、无中心化结算节点。〔V1.0〕资金池对手方模式已作为**并行选项**实现（§十一），原无池 veto-market 保持可用。
 
 产品UI对标轻量化预测市场：用户只需对标的价格方向做判断，界面把 `vetoUnderpriced` / `vetoOverpriced` 包装成「看涨开仓」「看跌开仓」按钮。
 
 ### 1.2 示例标的定义（Demo 阶段）
+
+> 〔V1.0 R22〕演示标的多资产化：bot 按 assets 配置轮换报价 **NVDA / GLM / SNDK / DEEPSEEK** vs HKD（各 MockERC20，独立市场独立轮次）；LP Vault 单资产 MVP 主打 **NVDA/HKD**（vault `priceBase = NVDA`，faucet 同步铸 NVDA+HKD）。下表为原 V0.8/V0.9 主打标的，保留作叙事源。
 
 | 项目 | 详情 |
 |------|------|
@@ -250,6 +262,7 @@ IRMarket 是部署在 Monad 区块链上的**奇异标的链上多空市场**：
 - 交易面板：当前 ACTIVE 报价展示（价格 + 到期倒计时）+ 看涨/看跌按钮（映射两个 veto）
 - 持仓管理：资产余额、浮盈（轮中按 ACTIVE 报价、到期按 `getLatestPrice` 估值，B12）、反向平仓
 - 到期估值展示（无结算/领取按钮）
+- **LP Vault 页（`/vault`，〔V1.0 R20〕）**：三 Tab —— LP（存入/取出/份额/权责金池统计 + 稀释警告）、Trade（多空 + 数额 + 期限 + 预览：fee/notional/2N/units + 最大亏损=本金）、Positions（聚合 Open PnL + 单仓卡片：Estimated PnL / 到期 Settle / Realized PnL）+ canonical 价格头 + MVP 限制披露横幅。实现规格：`docs/design/lp-pool-frontend-design.md`
 
 ---
 
@@ -264,6 +277,13 @@ IRMarket 是部署在 Monad 区块链上的**奇异标的链上多空市场**：
 产品入口 → 市场列表 → 标的详情页（当前报价 + 看涨/看跌 veto）
                           ↓
                     持仓管理页 → 反向平仓 / 到期估值
+```
+〔V1.0〕并行的 LP Vault 链路：
+```
+Vault 页（canonical 价格头 + MVP 限制横幅）
+      ├─ LP Tab：存入 HKD → 份额 → 池统计 / 取出
+      ├─ Trade Tab：多/空 + 数额 + 期限 → 预览(2N 封顶) → openPosition
+      └─ Positions Tab：聚合 Open PnL（当前价估值） → 到期 Settle → Realized PnL
 ```
 
 ### 5.3 分页面UI与交互
@@ -288,6 +308,17 @@ IRMarket 是部署在 Monad 区块链上的**奇异标的链上多空市场**：
 - 场景1 看跌开仓：列表→看跌→详情→成交规模展示（整笔）→预览（vetoOverpriced @ P）→签名→收到 HKD→持仓页显示空头浮盈
 - 场景2 反向平仓：持仓→反向平仓→预览（vetoUnderpriced @ P'）→签名→收回 LLM，仓位关闭
 - 场景3 到期：3min 到期→bot 终报→持仓卡显示最终盈亏（无操作）→可反向 veto 变现
+- 〔V1.0〕场景4 LP 存入：Vault→LP→Approve+Deposit(100 HKD)→Equity/Share price/Pending payouts 可读→可随时 Withdraw
+- 〔V1.0〕场景5 Vault 开多：Trade→LONG→数额+期限→预览(fee=1%,N=D−fee,maxPayout=2N, Max loss=D)→Approve→Open LONG→Positions 显示估计 PnL
+- 〔V1.0〕场景6 到期结算：倒计时归零→Settle 按钮激活→点击→结算价=canonical→卡片转 Realized payout/PnL（payout−deposit）
+
+### 5.5 LP Vault 页 UI 与交互（〔V1.0〕）
+
+- **价格头**：canonical 价格（`getLatestPrice(NVDA, HKD)`，formatPrice 大字）+ "Price unavailable" 降级态（禁开仓/settle 预览）；说明文字"settlement = Monoracle canonical price (price only, not the venue)"
+- **MVP 限制横幅**：六条披露（价格可操纵/无提前平仓/无退款/结算选择权/存盘稀释/溢出搁置）+ 规格链接
+- **LP Tab**：Deposit 卡（数额 → 首次 Approve → Deposit）、Withdraw 卡（份额 Max + "You receive" 预览）、池统计六格（Equity / Share price（totalShares=0 显示 —）/ Total shares / Pool balance / Pending payouts / Your shares）；`pendingPayout>0` 时显示稀释警告
+- **Trade Tab**：LONG/SHORT 切换、数额 D、期限（blocks 预设 1min≈200 / 3min≈600 / 10min≈2000，接受任意）、预览行（Entry price / Fee / Notional N / Max payout 2N / Units / Max loss = D / Max profit = N）
+- **Positions Tab**：顶部聚合 "Open PnL (estimated at current price)"（绿/红）；卡片：方向章 + #id + OPEN/SETTLED 章、Deposit/Notional/Entry price/Expiry 倒计时、Estimated payout + Estimated PnL（OPEN）、Realized payout + Realized PnL（payout−deposit）（SETTLED，摘自 PositionSettled 事件）；Settle 按钮仅 `block ≥ expiry` 激活（免许可，代 owner 收款）
 
 ---
 
@@ -295,14 +326,15 @@ IRMarket 是部署在 Monad 区块链上的**奇异标的链上多空市场**：
 
 | 模块 | Demo 包含 | 暂不实现 |
 |------|-----------|----------|
-| 标的 | 溜溜梅（06658.HK / HKG:6658，✅ D-12 已确认），bot 接真实行情 | 多标的、用户自定义标的 |
-| 交易 | 看涨/看跌 veto 开仓、反向 veto 平仓、到期 UI 估值（✅ D-08/D-09） | 限价单、止盈止损、杠杆/保证金 |
-| 做市商 | bot 持续报价（✅ D-05 可配间隔）+ 到期终报（✅ D-06） | 多做市商、分级基金（Stage 2） |
-| 价格 | Monoracle 报价 + 否决仲裁（🔁 自部署分叉，窗口=到期 D-13） | 多报价聚合 |
+| 标的 | 〔V1.0 R22〕bot 多资产：**NVDA / GLM / SNDK / DEEPSEEK** vs HKD（各 MockERC20）；vault 主打 **NVDA/HKD**；原"溜溜梅 06658.HK（✅ D-12）"叙事保留于 V0.9 文档 | 真实行情接入（bot 接数源）、用户自定义标的 |
+| 交易 | 看涨/看跌 veto 开仓、反向 veto 平仓、到期 UI 估值（✅ D-08/D-09）；〔V1.0〕**Vault 模式**：存入/取出 HKD、capped 多空开仓（`openPosition`）、到期免许可 `settlePosition`（✅ D-17/D-18） | 限价单、止盈止损、杠杆/保证金；〔V1.0〕提前平仓、退款路径 |
+| 做市商 | bot 持续报价（✅ D-05 可配间隔）+ 到期终报（✅ D-06）；〔V1.0〕多资产 assets-file 轮换（NVDA/GLM/SNDK/DEEPSEEK 四对） | 多做市商、分级基金（Stage 2）；〔V1.0〕vault 专用 settlement keeper |
+| LP 侧 | 〔V1.0〕池 = 对手方：存入/取出（保守 equity）、份额（内部账本）、2N 封顶赔付、稀释披露 | ERC20 份额转移、提款队列、🏭多池 |
+| 价格 | Monoracle 报价 + 否决仲裁（🔁 上游合约，CWV-01 迁移后无分叉） | 多报价聚合；〔V1.0〕PriceAdapter 联动 |
 | 费用 | ✅ D-11/D-16：IRMarket 包裹层显式扣 1%（HKD 计） | 动态费率、嵌入报价价差（不可行） |
-| 资产 | HKD/LLM 测试币（MockERC20）+ faucet | 多币种、稳定币、真实法币通道 |
-| 前端 | 市场列表、交易面板（报价+到期倒计时）、持仓/浮盈、到期估值 | 高级K线、深度图 |
-| 合约 | Monoracle（自部署分叉）+ IRMarket 薄层（工厂+费用包裹） | IRMarket 全功能市场合约 |
+| 资产 | HKD + 标的测试币（MockERC20）+ faucet（faucet 与 vault 出入金对齐） | 多币种、稳定币、真实法币通道 |
+| 前端 | 市场列表、交易面板（报价+到期倒计时）、持仓/浮盈、到期估值；〔V1.0〕`/vault` LP/Trade/Positions 三 Tab + PnL 展示 | 高级K线、深度图 |
+| 合约 | Monoracle（上游部署）+ IRMarket 薄层（工厂+费用包裹）+〔V1.0〕`IRMarketVault`（单资产 cap-linear 池） | IRMarket 全功能市场合约 |
 
 ---
 
@@ -313,11 +345,12 @@ IRMarket 是部署在 Monad 区块链上的**奇异标的链上多空市场**：
 3. ✅ 结算：到期 bot 终报定标 + UI 估值，无链上结算/领取（D-09；Q4 答案）
 4. ✅ 手续费：IRMarket 包裹层显式扣 1%（D-11），HKD 计（D-16）
 5. ✅ 报价节奏：可配间隔，3min 内完成全链路（D-05）；否决窗口 = 到期（D-13）
-6. ✅ UI 链路：faucet→开仓(veto)→持仓→反向平仓→到期估值，无断点
+6. ✅ UI 链路：faucet→开仓(veto)→持仓→反向平仓→到期估值，无断点；〔V1.0〕faucet→LP 存入→多空开仓→到期 Settle→Realized PnL，无断点
 7. ✅ 设计风格：卡片式、黄色主色
-8. ⚠️ 标的：溜溜梅 06658.HK 已确认（D-12）；真实行情源的接入方式待开发时确认（bot 拉数源）
+8. ⚠️ 标的：溜溜梅 06658.HK 已确认（D-12）；真实行情源的接入方式待开发时确认（bot 拉数源）；〔V1.0〕演示标的多资产化（NVDA/GLM/SNDK/DEEPSEEK，JavaDoc 式 assets 文件驱动）
 9. ✅〔v0.8.1〕窗口/分叉：Monoracle 已编译 + 6 窗口测试通过；市场不去重（D-14）、不限报价来源（D-15）
-10. ❓ 其他遗漏场景（请在下方反馈）
+10. ✅〔V1.0〕LP Vault 验收：unit fixture（`D=100 → fee=1, N=99, maxPayout=198; payout@150 = 148.5, equity 902→951.5`）+ Playwright 20/20 + 用户流程录像；
+11. ❓ 其他遗漏场景（请在下方反馈）
 
 ---
 
@@ -347,6 +380,11 @@ IRMarket 是部署在 Monad 区块链上的**奇异标的链上多空市场**：
 - **D-14 市场不去重**：同一标的多市场并存（不同到期/费率），到期后再上新轮次；createMarket 永远新建 marketId
 - **D-15 不限报价来源**：wrapper 允许 veto 任何 provider 的报价；1% 费用归注册 MM
 - **D-16 手续费 HKD 计**：`feeBps × quoteAmount / 10000`（HKD）；看涨加在付入端、看跌从收付出扣
+
+### V1.0 新增决策（D-17 ~ D-18，LP Vault）
+
+- **D-17 资金池 = 并行对抗方模式**：新增独立 `IRMarketVault`（单池、构造器配置 oracle/priceBase/settlementToken/feeBps；**单资产**——只托管 settlementToken=HKD，priceBase 仅为报价对 key 永不被池持有）；交易 = 池为对手方的 capped-linear 多空头寸（`payout ∈ [0, 2N]`，最大亏损 = 本金），到期按 `getLatestPrice` 结算；与 veto-market 并存、语义不混用
+- **D-18 Vault UI 契约**：`/vault` 三 Tab（LP 存取/Trade 开仓/Positions 结算+PnL）；到期结算 = 免许可（任何人可调，页面 Settle 按钮仅到期后激活，代 owner 收款）；PnL 双向可见（开仓后 Estimated @ 当前价、结算后 Realized=payout−deposit）；MVP 六条限制在页面横幅披露（价格可操纵/无提前平仓/无退款/结算选择权/存盘稀释/溢出搁置）
 
 ---
 
@@ -395,3 +433,43 @@ IRMarket 是部署在 Monad 区块链上的**奇异标的链上多空市场**：
 - **B10（报价来源）→ 答案 b**：不限制 → **D-15**
 - **B11（做空费币种）→ 答案**："按 quote 收取更好理解"→ **D-16**：统一 HKD
 - **分叉位置 → 答案 a**：分叉到 IRMarket repo（`contracts/Monoracle.sol`，用户批准的唯一破例）
+
+---
+
+## 十一、LP Vault（LP 资金池，V1.0 MVP）✅ 已实现
+
+> 本节是资金池模式的**需求级**定义（从原前端 handoff 文档合并而来）。实现级规格（hooks / 数据层 / 已部署地址 / 测试命令）见 `docs/design/lp-pool-frontend-design.md`；合约与经济设计见 `docs/design/lp-pool-tech-spec.md`（§1.4 MVP 裁剪 = 本节的需求基线）。录像：`docs/product/videos/lp-vault-user-flow.webm`；人工演示脚本：`docs/product/DEMO_LP_VAULT.md`。
+
+### 11.1 定位与边界
+
+| 项 | 定义 |
+|---|---|
+| 模式 | 资金池 = 交易的**对手方**（V0.9 veto-market 并行存在，✅ D-17；两套语义不得在同一笔持仓内混用） |
+| 单资产 | 池只托管 **settlementToken（HKD）**：存入/取出/权金/赔付/equity 全以 HKD 计（✅ R21/D-17） |
+| 标的 | `priceBase`（NVDA）仅作为 Monoracle 报价对 `(priceBase, settlementToken)` 的 **pair key** 产生价格，**永不被池持有或转移** |
+| 产品 | capped-linear 多空：fee=1% → `N = D − fee` → 到期按 canonical price 结算，`payout ∈ [0, 2N]`，**最大亏损 = 本金 D**，无爆仓/追缴/保证金 |
+| 入口 | 交易：`openPosition(side, D, tenorBlocks)`；LP：`deposit/withdraw`（保守 `equity = balance − pendingPayout` 份额账本）；到期：免许可 `settlePosition`（页面 Settle 按钮，代 owner 收款） |
+
+### 11.2 功能需求（用户视角）
+
+1. **LP（流动性）**：存入 HKD → 按比例获得份额；随时取出（份额 × 当前 equity / totalShares）；页面常显 Equity / Share price / Total shares / Pool balance / Pending payouts；`pendingPayout > 0` 时显示"资金池保留最坏赔付，现在存入买到折价份额"的稀释警告
+2. **Trader**：LONG/SHORT + 数额 D + 期限（blocks；预设 3min≈600）→ 预览 fee / N / maxPayout=2N / units / 最大亏损=本金 / 最大利润=N → Approve + 开仓
+3. **PnL 双向可见**（✅ D-18）：开仓后持仓卡显示 **Estimated PnL**（按当前 canonical price 估值，标注"estimated at current price"）+ 顶部聚合 **Open PnL**；到期 Settle 后显示 **Realized payout / Realized PnL**（payout − deposit）
+4. **结算**：到期后（`block ≥ expiryBlock`）Settle 按钮激活；无 bot 结算 keeper（V1 范围）；canonical 价格由 bot 每轮报价驱动——bot 停轮则价格冻结、PnL 缺口
+5. **价格可用性降级**：`PriceUnavailable`（无价/0 价）→ 价格头显示不可用并禁用开仓/settle
+
+### 11.3 MVP 接受的限制（页面横幅披露；详见 tech-spec §1.4）
+
+1. 结算用裸 canonical price（可被小额报价操纵）→ V1 PriceAdapter 解决
+2. 无提前平仓：只能到期后结算
+3. 无退款：到期无有效价格时持仓搁置
+4. 结算选择权：按调用时价格结算（类美式）
+5. 存盘稀释：持仓期存入按折价权益获得份额
+6. 极端值溢出可令持仓永久搁置（有界 grief）
+
+### 11.4 验收（✅ 全部达成）
+
+- 单元 fixture（前端与合约同根）：`D=100 → fee=1, N=99, maxPayout=198`；`S0=100→S1=150 → payout=148.5`；LP equity `1000 → 902（开仓）→ 951.5（结算）`
+- `npm run test:unit` = 17 通过；Playwright E2E = **20/20**（含 13-vault 三用例）
+- 用户流程录像：`docs/product/videos/lp-vault-user-flow.webm`（开仓 → 价格 130→150 → Open PnL 转正 +1.x）
+- 测试网部署：vault `0xE4B88dc2…52f7`、oracle `0xb6523DA6…`、NVDA `0xD092361E…`、HKD `0x34675029…`（生产环境 = Vercel Production env + `deployment-vault.json`）

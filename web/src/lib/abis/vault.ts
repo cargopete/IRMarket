@@ -1,7 +1,7 @@
 import type { Abi } from "viem";
 
 // IRMarketVault (LP-pool MVP) ABI — hand-authored from the artifact at
-// artifacts/contracts/IRMarketVault.sol/IRMarketVault.json (lp-pool-frontend-handoff §2).
+// artifacts/contracts/IRMarketVault.sol/IRMarketVault.json (lp-pool-frontend-design §2).
 export const VAULT_ABI = [
   {
     type: "function",

@@ -9,7 +9,7 @@ import { useCurrentBlock } from "./useCurrentBlock";
 
 // Monad testnet RPCs cap eth_getLogs at a ~100-block range (see usePositions.ts), so event
 // history is fetched in chunked windows. PositionSettled stores the realized payout that the
-// struct itself does not persist (lp-pool-frontend-handoff §2/§4.4).
+// struct itself does not persist (lp-pool-frontend-design §2/§4.5).
 const LOG_CHUNK_BLOCKS = 100n;
 const LOOKBACK_BLOCKS = 5000n;
 

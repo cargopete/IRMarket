@@ -1,5 +1,11 @@
 # IRMarket UI / Business Logic Fix Plan
 
+> **Status (2026-10-14): superseded / informational.** The P0 functional fixes and the
+> generic multi-market UI landed via PRs #6–#8 ( markets list, nextMarketId enumeration,
+> Monoracle fork ABI match). Kept as a record of the audit→plan sequence; the current
+> spec is `docs/web-tech-design.md` (+ `docs/design/lp-pool-frontend-design.md` for the
+> LP Vault).
+
 This plan turns the audit findings into a sequenced implementation plan. It focuses on
 functional/architectural bugs, not trivial string tweaks.
 

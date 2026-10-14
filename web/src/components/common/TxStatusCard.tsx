@@ -13,7 +13,7 @@ export type TxState =
 export function mapTransactionError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   const map: Array<[RegExp, string]> = [
-    // IRMarketVault (LP-pool MVP) errors — lp-pool-frontend-handoff §8
+    // IRMarketVault (LP-pool MVP) errors — lp-pool-frontend-design §8
     [/PriceUnavailable/, "Waiting for a price — try again shortly."],
     [/Insolvent/, "Pool capacity insufficient for this size."],
     [/DepositAtZeroEquity/, "The pool is fully reserved; deposits are paused until positions settle."],

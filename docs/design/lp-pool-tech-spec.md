@@ -2,8 +2,8 @@
 
 > **Status:** Draft (V1.0). This document is the **target design**. A reduced **MVP cut**
 > is defined in §1.4 and is **implemented** (`contracts/IRMarketVault.sol`, unit + E2E tests,
-> `script/deploy-vault.js`, `script/vault-demo.js`); the implementation plan lives in
-> `docs/design/lp-pool-mvp-impl-plan.md`.
+> `script/deploy-vault.js`, `script/vault-demo.js`); the frontend for it is specified in
+> `docs/design/lp-pool-frontend-design.md` and its product requirements in `docs/prd.md` §十一.
 >
 > **Companion documents**
 > - `docs/sc-tech-spec.md` — V0.9 **veto-market** (deployed): trading = Monoracle veto, bot is
@@ -66,8 +66,8 @@ funds.
 
 The full V1 design above (§1.1) is the destination. The **MVP** is everything needed to
 demonstrate the core claim — *a pool is the counterparty and positions settle at
-Monoracle's canonical price* — in a few hours, and is what the implementation plan
-(`docs/design/lp-pool-mvp-impl-plan.md`) delivers.
+Monoracle's canonical price* — in a few hours. It is **built and closed out** (§15.1);
+frontend spec: `docs/design/lp-pool-frontend-design.md`; product requirements: `docs/prd.md` §十一.
 
 | Area | MVP | Deferred to V1 |
 |---|---|---|
@@ -105,6 +105,16 @@ PnL is settled in the single unit `Q`. See §4.1.
   with the trader's own premium, so it is a bounded grief, not a solvency break.
 - **Direct donations are stranded.** Quote tokens sent straight to the vault are not counted
   in `balance` and cannot be swept.
+- **Instant withdraw, no queue / no share token.** Withdraw is safe the same block it lands
+  (conservative equity means it never touches reserved capital), but it is not the two-step
+  queue of §6.4, and shares are an internal mapping, not ERC20 (as-built choice).
+- **No first-depositor seed burn (LP-D5 accepted for MVP).** The first LP mints 1:1; the
+  classic donation-inflation attack is uneconomic only because the MVP is demo-scale.
+- **`pendingPayout` double-counts both sides.** It sums `maxPayout` over every OPEN position,
+  long and short — intentionally conservative (§6.2) at the cost of capital efficiency.
+- **Block-based tenor.** `expiryBlock = openBlock + tenorBlocks`, no wall-clock alignment
+  with Monoracle rounds; per-chain re-derivation required for anything beyond Monad @300ms
+  (§11).
 
 ---
 
@@ -387,7 +397,8 @@ Mitigations (choose one before V1 — LP-D14):
 
 **MVP decision: accept and disclose** — the MVP has instant, permissionless
 deposit/withdraw, so the harvest is a two-transaction pair; it is accepted for the demo
-(plan §6, risk 8) and covered by an explicit M5 test so the behaviour is visible.
+(§1.4 risks) and covered by an explicit test (`test/IRMarketVault.test.js` M5 dilution
+window) so the behaviour is visible.
 
 ---
 
@@ -943,6 +954,15 @@ Two consequences worth calling out for the grant:
 
 ## 14. Testing strategy and invariants
 
+> **As-built (MVP):** the shipped test sources are the inventory —
+> `test/IRMarketVault.test.js` (unit + hardening: the §3 worked example `D=100 → fee=1, N=99,
+> maxPayout=198; S0=100→S1=150 → payout=148.5`, payoff boundaries including `S = 1 wei`,
+> deposit-dilution window §6.5, permissionless settle, double-settle → `NotOpen`, fuzz-lite
+> solvency invariant `balance ≥ pendingPayout`, checked-math overflow → Panic) and
+> `test/IRMarketVault.e2e.test.js` (contract-level lifecycle). Frontend math helpers mirror
+> the same fixture in `web/src/lib/vault.test.ts` (`npm run test:unit`). The section below
+> defines the test target for the MVP build and V1 (remainder applies to V1 modules).
+
 Unit:
 - Payoff matrix: flat, `2×`, `5×`, the `0` limit, and exactly at the cap boundary; both sides.
   The `0` row is the `S → 0⁺` limit (§4.2), not on-chain state — the MVP tests cover the closest
@@ -986,11 +1006,11 @@ Invariants (fuzz):
 
 ## 15. Roadmap — MVP track, then V1
 
-The MVP track (M0–M4) is the review/build target (§1.4); its detailed task breakdown,
-acceptance criteria and test plan live in `docs/design/lp-pool-mvp-impl-plan.md`. The V1
+The MVP track (M0–M6) is complete and closed out (§15.1); this section remains so the
+spec stays the single source of truth for the contract design. The V1
 track (P0–P6) is the full design.
 
-### 15.1 MVP track (V1.0-mvp)
+### 15.1 MVP track (V1.0-mvp) — CLOSED
 
 | Phase | Deliverable | Files | Status |
 |---|---|---|---|
@@ -998,8 +1018,17 @@ track (P0–P6) is the full design.
 | **M1** | Product: capped linear LONG/SHORT, payoff §4.2, solvency invariant | `contracts/IRMarketVault.sol` | done |
 | **M2** | Settlement at expiry off `IMonoracle.getLatestPrice` | `contracts/IRMarketVault.sol` | done |
 | **M3** | Tests: deposit/shares, long cap, flat, short, pre-expiry, insolvency, no-price, withdraw | `test/IRMarketVault.test.js` | done (21 passing) |
-| **M4** | Demo glue: deploy script + scripted price→open→settle walkthrough | `script/deploy-vault.js`, `script/vault-demo.js` | done |
+| **M4** | Demo glue: deploy script + scripted price→open→settle walkthrough | `script/deploy-vault.js`, `script/vault-demo.js`, `script/deploy-vault-rpc.js` | done |
 | **M5** | Hardening + E2E: payoff boundaries, dilution, fuzz invariants, overflow; contract-level E2E suite | `test/IRMarketVault.test.js`, `test/IRMarketVault.e2e.test.js` | done (54 passing total, 9 E2E) |
+| **M6** | Frontend (`/vault`: LP / Trade / Positions tabs, PnL display, demo banner) + Playwright suite + user-flow video | `web/src/components/vault/*`, `web/src/hooks/useVault*`, `web/tests/video/*` | done (web unit 17, E2E 20/20) |
+
+**MVP close-out decisions** (from the MVP review questions — as built):
+- Shares are an **internal mapping**, not an ERC20 token; no transfer UI.
+- Settlement **marks at call-time price** (§1.4 risks); a vault settlement keeper is V1 scope,
+  not MVP operational scope.
+- Demo baseline **reuses the V0.9 stack** (oracle `0xb652…`) with `priceBase = NVDA`
+  `0xD092…` / `settlementToken = HKD` `0x3467…`; the MVP frontend requires no factory.
+- Pending payout stays **gross** (double-counts both sides — conservative).
 
 ### 15.2 V1 track (full design)
 

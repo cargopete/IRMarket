@@ -23,7 +23,7 @@ import {IMonoracle} from "./IMonoracle.sol";
  *         Price manipulation defence is out of scope here (see spec §8) — this is a
  *         demo of the payoff/settlement accounting only.
  *
- *         Accepted MVP limitations (impl-plan §6): settlement marks at call-time price
+ *         Accepted MVP limitations (tech-spec §1.4): settlement marks at call-time price
  *         (American option), a pathological overflow strands a position, and settlement
  *         tokens sent directly to the vault are not counted and cannot be swept.
  */
@@ -201,7 +201,7 @@ contract IRMarketVault is ReentrancyGuard {
 
     /// @dev Permissionless. Marks at the canonical price at *call* time, not at expiry, so a
     ///      position is effectively American — the holder may settle late when the price is
-    ///      favourable. Accepted MVP risk (impl-plan §6); V1 pins settlement to the expiry
+    ///      favourable. Accepted MVP risk (tech-spec §1.4); V1 pins settlement to the expiry
     ///      window (spec §9.3).
     function settlePosition(uint256 positionId) external nonReentrant returns (uint256 payout) {
         Position storage p = _positions[positionId];

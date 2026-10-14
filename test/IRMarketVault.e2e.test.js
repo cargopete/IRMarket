@@ -8,7 +8,7 @@
  *
  * Canonical walkthrough + exact numbers mirror `script/vault-demo.js` (see E2E-7).
  * Payoff: `docs/design/lp-pool-tech-spec.md` §4.2; accounting §6; lifecycle §9;
- * MVP cut §1.4; risks `docs/design/lp-pool-mvp-impl-plan.md` §6.
+ * MVP cut §1.4; risks §1.4 (accepted list).
  *
  * Signers: [deployer, lp1, lp2, trader, trader2, keeper, provider].
  */
