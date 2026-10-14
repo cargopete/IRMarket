@@ -336,13 +336,13 @@
         },
         {
           "internalType": "uint32",
-          "name": "settledSlot",
+          "name": "expiryBlock",
           "type": "uint32"
         },
         {
-          "internalType": "uint256",
-          "name": "expiryBlock",
-          "type": "uint256"
+          "internalType": "uint32",
+          "name": "settledSlot",
+          "type": "uint32"
         },
         {
           "internalType": "enum MonoracleWindowed.QuoteStatus",

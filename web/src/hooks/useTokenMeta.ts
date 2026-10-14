@@ -15,31 +15,33 @@ export interface TokenMeta {
  * Falls back to { symbol: "???", decimals: 18 } when a call fails.
  */
 export function useTokenMeta(addresses: `0x${string}`[]) {
-  const unique = useMemo(
-    () => [...new Set(addresses.map((a) => a.toLowerCase()))],
+  // Drop invalid/placeholder addresses ("0x"): a batch containing them errors on viem's
+  // isAddress assert and the entry gets stuck (symbols render "???" forever).
+  const valid = useMemo(
+    () => [...new Set(addresses.filter((a) => a && a !== "0x").map((a) => a.toLowerCase()))],
     [addresses],
   );
 
   const { data } = useReadContracts({
-    contracts: unique.flatMap((addr) => [
+    contracts: valid.flatMap((addr) => [
       { address: addr as `0x${string}`, abi: ERC20_ABI, functionName: "symbol", args: [] as never[] },
       { address: addr as `0x${string}`, abi: ERC20_ABI, functionName: "decimals", args: [] as never[] },
     ]),
-    query: { enabled: unique.length > 0 },
+    query: { enabled: valid.length > 0 },
   });
 
   const metaMap = useMemo(() => {
     const map = new Map<string, TokenMeta>();
-    for (let i = 0; i < unique.length; i++) {
+    for (let i = 0; i < valid.length; i++) {
       const symbolResult = data?.[i * 2]?.result as string | undefined;
       const decimalsResult = data?.[i * 2 + 1]?.result as number | undefined;
-      map.set(unique[i], {
+      map.set(valid[i], {
         symbol: symbolResult ?? "???",
         decimals: decimalsResult ?? 18,
       });
     }
     return map;
-  }, [data, unique]);
+  }, [data, valid]);
 
   return metaMap;
 }

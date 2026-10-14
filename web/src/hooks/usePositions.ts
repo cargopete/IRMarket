@@ -32,7 +32,7 @@ interface RawLog {
 async function readQuote(
   publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
   quoteId: bigint,
-): Promise<{ price: bigint; baseAmount: bigint; quoteAmount: bigint; expiryBlock: bigint; provider: `0x${string}`; baseToken: `0x${string}`; quoteToken: `0x${string}` } | null> {
+): Promise<{ price: bigint; baseAmount: bigint; quoteAmount: bigint; expiryBlock: bigint; settledSlot: bigint; provider: `0x${string}`; baseToken: `0x${string}`; quoteToken: `0x${string}` } | null> {
   const q = await publicClient
     .readContract({
       address: ORACLE_ADDRESS as `0x${string}`,
@@ -42,7 +42,9 @@ async function readQuote(
     })
     .catch(() => null);
   if (!q) return null;
-  const [provider, baseToken, quoteToken, baseAmount, quoteAmount, price, , , expiryBlock] = q as readonly [
+  // quotes() tuple: provider, baseToken, quoteToken, baseAmount, quoteAmount, price,
+  // startSlot(uint32), expiryBlock(uint32), settledSlot(uint32), status(uint8)
+  const [provider, baseToken, quoteToken, baseAmount, quoteAmount, price, , expiryBlock, settledSlot] = q as readonly [
     `0x${string}`,
     `0x${string}`,
     `0x${string}`,
@@ -62,6 +64,7 @@ async function readQuote(
     quoteAmount: quoteAmount as bigint,
     price: price as bigint,
     expiryBlock: BigInt(expiryBlock),
+    settledSlot: BigInt(settledSlot),
   };
 }
 
