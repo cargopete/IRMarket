@@ -4,35 +4,47 @@ import { useState } from "react";
 import { useAccount } from "wagmi";
 import { MarketCard } from "@/components/market/MarketCard";
 import { FaucetModal } from "@/components/faucet/FaucetModal";
-import { useMarkets } from "@/hooks/useMarkets";
+import { useMarketGroups, type MarketGroup } from "@/hooks/useMarketGroups";
 import { useBalances } from "@/hooks/useBalances";
 import { useHydrated } from "@/hooks/useHydrated";
-import { useReferencePrice } from "@/hooks/useReferencePrice";
-import { useTokenMeta } from "@/hooks/useTokenMeta";
+import { useQuotes } from "@/hooks/useQuotes";
 import { formatAmount } from "@/lib/format";
 import { isFullyConfigured } from "@/lib/config";
+import type { Quote } from "@/lib/types";
+
+/** Quotes of one pair, newest last (stable order from the shared batch). */
+function forPair(quotes: Quote[], group: MarketGroup): Quote[] {
+  return quotes.filter(
+    (q) => q.baseToken.toLowerCase() === group.baseToken.toLowerCase() && q.quoteToken.toLowerCase() === group.quoteToken.toLowerCase(),
+  );
+}
 
 export default function HomePage() {
   const mounted = useHydrated();
   const { address } = useAccount();
-  const markets = useMarkets();
-  const market = markets.length > 0 ? markets[0] : undefined;
-  const tokens = market ? { base: market.baseToken, quote: market.quoteToken } : null;
-  const balances = useBalances(mounted ? address : undefined, tokens);
-  const metaMap = useTokenMeta(
-    market ? [market.baseToken, market.quoteToken] : [],
-  );
-  const baseMeta = market
-    ? (metaMap.get(market.baseToken.toLowerCase()) ?? { symbol: "LLM", decimals: 18 })
-    : { symbol: "LLM", decimals: 18 };
-  const quoteMeta = market
-    ? (metaMap.get(market.quoteToken.toLowerCase()) ?? { symbol: "HKD", decimals: 18 })
-    : { symbol: "HKD", decimals: 18 };
-  const [faucetOpen, setFaucetOpen] = useState(false);
+  const groups = useMarketGroups();
+  const { quotes, activeQuotes } = useQuotes(null);
 
-  const price = useReferencePrice(
-    market && isFullyConfigured ? { base: market.baseToken, quote: market.quoteToken } : null,
-  );
+  // One shared quotes batch (all pairs) — the cheapest way to mark every group on-chain.
+  const prices = new Map<string, bigint>();
+  for (const g of groups) {
+    const key = `${g.baseToken.toLowerCase()}/${g.quoteToken.toLowerCase()}`;
+    const activeForPair = forPair(activeQuotes, g);
+    const all = forPair(quotes, g);
+    const display =
+      activeForPair.length > 0
+        ? activeForPair[activeForPair.length - 1].price
+        : all.length > 0
+          ? all[all.length - 1].price
+          : undefined;
+    if (display !== undefined) prices.set(key, display);
+  }
+
+  const first = groups[0];
+  const tokens = first ? { base: first.baseToken, quote: first.quoteToken } : null;
+  const balances = useBalances(mounted ? address : undefined, tokens);
+
+  const [faucetOpen, setFaucetOpen] = useState(false);
 
   return (
     <div className="space-y-8">
@@ -57,43 +69,36 @@ export default function HomePage() {
           >
             Claim test tokens
           </button>
-          {mounted && address && (
+          {mounted && address && first && (
             <span className="text-text-dim">
-              Wallet balance · {quoteMeta.symbol} <span className="text-primary">{formatAmount(balances.quote, quoteMeta.decimals, 2)}</span>
+              Wallet balance · {first.quoteSymbol} <span className="text-primary">{formatAmount(balances.quote, first.quoteDecimals, 2)}</span>
               {"  ·  "}
-              {baseMeta.symbol} <span className="text-primary">{formatAmount(balances.base, baseMeta.decimals, 2)}</span>
+              {first.baseSymbol} <span className="text-primary">{formatAmount(balances.base, first.baseDecimals, 2)}</span>
             </span>
           )}
         </div>
       </section>
 
-      {/* markets */}
+      {/* markets — one card per asset pair, current round only (past rounds are history, not duplicated cards) */}
       <section>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Market</h2>
           <span className="text-xs text-text-dim">Symmetric long/short · 3-minute expiry · transactional quotes</span>
         </div>
 
-        {markets.length === 0 ? (
+        {groups.length === 0 ? (
           <p className="text-sm text-text-dim">No markets yet.</p>
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
-            {markets.map((m) => (
-              <MarketCard
-                key={m.marketId.toString()}
-                market={m}
-                price={price.status === "ok" ? price.price : undefined}
-              />
-            ))}
+            {groups.map((g) => {
+              const key = `${g.baseToken.toLowerCase()}/${g.quoteToken.toLowerCase()}`;
+              return (
+                <GroupCard key={key} group={g} price={prices.get(key)} />
+              );
+            })}
           </div>
         )}
       </section>
-
-      {price.status === "settling" && (
-        <p className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary">
-          Final price settling — the bot is settling the final quote.
-        </p>
-      )}
 
       {(!isFullyConfigured && (
         <p className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary">
@@ -104,5 +109,16 @@ export default function HomePage() {
 
       <FaucetModal open={faucetOpen} onClose={() => setFaucetOpen(false)} />
     </div>
+  );
+}
+
+function GroupCard({ group, price }: { group: MarketGroup; price: bigint | undefined }) {
+  return (
+    <MarketCard
+      market={group.active ?? group.latest}
+      price={price}
+      expired={!group.active}
+      liveRounds={group.activeRounds.length}
+    />
   );
 }

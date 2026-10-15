@@ -53,7 +53,14 @@ export type PriceState =
   | { status: "settling"; exists: false }
   | { status: "ok"; price: bigint; settledSlot: number; exists: true };
 
+/** Placeholder until the on-chain symbol()/decimals() read resolves (MarketCard renders a skeleton). */
+export const TOKEN_META_PENDING = "???";
+
 export interface MarketWithMeta extends Market {
+  baseSymbol: string;
+  quoteSymbol: string;
+  baseDecimals: number;
+  quoteDecimals: number;
   name: string;
   ticker: string;
 }

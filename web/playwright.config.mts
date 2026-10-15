@@ -16,6 +16,11 @@ const launchOptions =
       ? { executablePath: SYSTEM_CHROMIUM }
       : {};
 
+// E2E_PORT lets the suite run beside an unrelated dev server already bound to 3000
+// (e.g. another checkout). Unset → defaults to 3000 as before.
+const PORT = Number(process.env.E2E_PORT ?? 3000);
+const BASE_URL = `http://localhost:${PORT}`;
+
 export default defineConfig({
   testDir: path.join(WEB_DIR, "tests", "e2e"),
   fullyParallel: false,
@@ -27,7 +32,7 @@ export default defineConfig({
   globalSetup: path.join(WEB_DIR, "tests", "setup.ts"),
 
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: BASE_URL,
     headless: true,
     launchOptions: {
       ...launchOptions,
@@ -36,9 +41,9 @@ export default defineConfig({
   },
 
   webServer: {
-    command: "npx next dev --port 3000",
+    command: `npx next dev --port ${PORT}`,
     cwd: WEB_DIR,
-    port: 3000,
+    port: PORT,
     reuseExistingServer: false,
     timeout: 120000,
   },

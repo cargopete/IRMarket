@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { useAccount } from "wagmi";
+import { useAccount, usePublicClient } from "wagmi";
 import { useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { ERC20_ABI } from "@/lib/abis/market";
 import { BASE_TOKEN, QUOTE_TOKEN, FAUCET_AMOUNT, isFullyConfigured } from "@/lib/config";
@@ -14,6 +14,7 @@ import { useTokenMeta } from "@/hooks/useTokenMeta";
  */
 export function FaucetModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { address } = useAccount();
+  const publicClient = usePublicClient();
   const [target, setTarget] = useState(address ?? "");
 
   const tokenAddresses = [BASE_TOKEN, QUOTE_TOKEN].filter((a): a is `0x${string}` => !!a && a !== "0x");
@@ -33,12 +34,19 @@ export function FaucetModal({ open, onClose }: { open: boolean; onClose: () => v
 
   const busy = mintBase.isPending || mintQuote.isPending;
 
-  const mint = useCallback(() => {
-    if (!isFullyConfigured || !target) return;
+  const mint = useCallback(async () => {
+    if (!isFullyConfigured || !target || !publicClient) return;
     const to = target as `0x${string}`;
-    mintBase.writeContract({ address: BASE_TOKEN as `0x${string}`, abi: ERC20_ABI, functionName: "mint", args: [to, FAUCET_AMOUNT] });
-    mintQuote.writeContract({ address: QUOTE_TOKEN as `0x${string}`, abi: ERC20_ABI, functionName: "mint", args: [to, FAUCET_AMOUNT] });
-  }, [target, mintBase, mintQuote]);
+    // Sequential: two txs from one account in flight at once collide on the node's
+    // mempool ("replacement transaction underpriced") and can silently lose half the claim.
+    try {
+      const baseHash = await mintBase.writeContractAsync({ address: BASE_TOKEN as `0x${string}`, abi: ERC20_ABI, functionName: "mint", args: [to, FAUCET_AMOUNT] });
+      await publicClient.waitForTransactionReceipt({ hash: baseHash });
+      await mintQuote.writeContractAsync({ address: QUOTE_TOKEN as `0x${string}`, abi: ERC20_ABI, functionName: "mint", args: [to, FAUCET_AMOUNT] });
+    } catch {
+      // surfaced through receipt status below; user can retry
+    }
+  }, [target, mintBase, mintQuote, publicClient]);
 
   if (!open) return null;
 
