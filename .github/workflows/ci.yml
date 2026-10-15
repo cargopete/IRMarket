@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      # §8.6.3 pre-deploy gate: repo ABI copies must agree with the pinned upstream shape.
+      # (No oracle address is configured in CI, so the on-chain fingerprint pass is informational;
+      # deploys gate on it locally/CI-with-env via script/oracle-doctor.js exit code.)
+      - name: Oracle doctor (ABI drift gate)
+        run: node script/oracle-doctor.js
+      - name: Compile
+        run: npx hardhat compile
+      - name: Tests
+        run: npx hardhat test
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+        working-directory: web
+      - name: Typecheck
+        run: npx tsc --noEmit
+        working-directory: web
+      - name: Lint
+        run: npx eslint src
+        working-directory: web
+      - name: Build
+        run: npx next build
+        working-directory: web
+        env:
+          # Public contract addresses (not secrets) so the prerendered pages build fully wired.
+          NEXT_PUBLIC_RPC_URL: https://testnet-rpc.monad.xyz
+          NEXT_PUBLIC_CHAIN_ID: "10143"
+          NEXT_PUBLIC_ORACLE_ADDRESS: "0x807321100748d75a618e508de214123CB77C9f4D"
+          NEXT_PUBLIC_MARKET_ADDRESS: "0x39A14B5d0C049525C3C42dE57E6d4553B0df5C99"
+          NEXT_PUBLIC_BASE_TOKEN: "0xda9CF5A68cc2d8EFA5940db4094b6377D389DE17"
+          NEXT_PUBLIC_QUOTE_TOKEN: "0x36448Ef080ba5fa251e1a9bd61782786f9e24F04"
+          NEXT_PUBLIC_VAULT_ADDRESS: "0x95a74C58bbF1F8F56c02d27Aecc0024D98e67dD3"
