@@ -8,10 +8,16 @@
 
 ## 0. TL;DR (the 10-second version)
 
-- We moved IRMarket's Monoracle integration onto the **upstream build ("A")** — **code + tests only**.
-- 🟢 **Nothing is deployed.** The live site (`irmarket.xyz`) is **untouched** and still runs the
-  **fork ("B")** oracle `0xb652…`. A judge sees zero change.
-- The remaining work is **P5 (the deploy/cutover)**, deliberately not done yet — it's spelled out below.
+- We moved IRMarket's Monoracle integration onto the **upstream build ("A")** — **code + tests only** on `main`.
+- ✅ **A fresh "A" stack is now deployed to Monad testnet** (P5, partial): oracle `0x80732110…`, wrapper
+  `0x39A14B5d…`, HKD `0x36448Ef0…`, markets NVDA/GLM/SNDK/DEEPSEEK, vault `0x95a74C58…`. A **separate**
+  verifier bot (its own wallet) quotes it; see §7.
+- 🟢 **Production is still untouched.** `irmarket.xyz` / `www.irmarket.xyz` still resolve to the **fork ("B")**
+  deployment `irmarket-5cf3wog7e…` (alias unchanged, 59d) with the fork oracle `0xb652…`. A judge sees zero change.
+- A **Vercel Preview** build of this branch (A addresses in the **Preview** env scope only) exists for
+  verification; it has **no alias**, so it cannot affect `irmarket.xyz`.
+- The remaining work is the **Production cutover** (flip the Production env to the A addresses + one
+  `vercel --prod`) — deliberately not done yet. See §3 / §7.
 
 ---
 
@@ -54,7 +60,40 @@ so D-13 ("window = option expiry") **survives**. This was a swap, not a redesign
 
 ---
 
-## 3. What's NOT done — P5 (the deploy/cutover)
+## 2b. P5 — deployed to Monad (preview); production NOT cut over
+
+A **"A" consumer stack** was deployed to Monad testnet with `script/deploy-market-stack.js` (the
+consumer-mode deployer: it **never deploys Monoracle** — it takes the upstream oracle as
+`ORACLE_ADDRESS` and gates on the A fingerprint; the earlier `deploy-upstream-stack.js` that
+deployed its own oracle instance was renamed+refactored away). The wrapper + vault are bound to the
+consumed oracle at construction (the immutable-binding gap in §3). A **separate** verifier bot — its
+own wallet `0x5ceF21c2…`, config in `bot/.env` — quotes this stack, so it never shares a nonce with
+the production/fork bot.
+
+| Contract | Address |
+|---|---|
+| upstream oracle (A) | `0x807321100748d75a618e508de214123CB77C9f4D` (`VS=2`, `MAXVS=12000`) |
+| IRMarket wrapper | `0x39A14B5d0C049525C3C42dE57E6d4553B0df5C99` |
+| HKD quote | `0x36448Ef080ba5fa251e1a9bd61782786f9e24F04` |
+| NVDA base | `0xda9CF5A68cc2d8EFA5940db4094b6377D389DE17` |
+| GLM base | `0x35B3f6b418d4D78961636Ec59d52c64B0f04612c` |
+| SNDK base | `0x760c5Ceb6333f5C0F69a980EF5EcCF5d6ffE24eA` |
+| DEEPSEEK base | `0xbc25eF3e40B43806803a87c5CB2bbdA80b9b92d5` |
+| LP vault | `0x95a74C58bbF1F8F56c02d27Aecc0024D98e67dD3` |
+
+Verified: `node script/oracle-doctor.js 0x80732110…` → **A**, no drift; `wrapper.oracle()` ==
+`vault.oracle()` == the new oracle. Locally (`web/.env.local` → A, `next dev`): `/` lists the 4 markets,
+`/trade` shows a live bot quote (Long/Short enabled), `/vault` reads the canonical NVDA price
+(`225.638732 HKD/NVDA`).
+
+Vercel: a **Preview** deployment of this branch with the A addresses in the **Preview** env scope was
+created for verification. It has **no alias**; the **Production** env scope and every `irmarket.xyz`
+alias are unchanged.
+
+> ⚠️ The A verifier bot needs a funded MON balance (its wallet is not the deployer). Top it up from the
+> deployer wallet if it logs `Signer had insufficient balance`.
+
+## 3. Remaining — the Production cutover
 
 🔴 **The deployed contracts are immutable-bound to the fork oracle and must be redeployed.**
 
@@ -90,6 +129,12 @@ cd web && npx playwright test          # 20 passing (starts its own anvil + dev 
 # guard + generator
 node script/oracle-doctor.js           # fingerprint repo ABIs + configured oracle
 node script/sync-oracle-abi.js         # regenerate both ABI copies from ../monoracle build
+
+# deploy the IRMarket consumer stack: wrapper + HKD + 4 asset rounds + ONE vault
+# CONSUMES the upstream oracle via ORACLE_ADDRESS (required, fingerprint-gated, --dry-run available)
+# tokens are reused from deployment-assets.json (mint top-ups); never redeployed
+#   $env:ORACLE_ADDRESS="0x807321100748d75a618e508de214123CB77C9f4D"
+node script/deploy-market-stack.js
 ```
 
 **Gotchas (learned the hard way):**
@@ -113,4 +158,6 @@ node script/sync-oracle-abi.js         # regenerate both ABI copies from ../mono
 ## 6. Status of the live deployment
 
 - **Untouched.** `irmarket.xyz` → fork oracle `0xb652…`, wrapper `0x03b181…`, vault `0xE4B88d…`.
-- The bot may still be running against the fork; stop it before P5 to avoid quoting a dead oracle.
+- The era **fork bot** (`../IRMarket`, deployer wallet `0xF5Cf…`) is still running against the fork. The
+  **A-stack bot** (this worktree, wallet `0x5ceF21c2…`, `bot/.env`) runs in parallel — different key, so
+  no nonce contention. Stop the fork bot only at cutover.

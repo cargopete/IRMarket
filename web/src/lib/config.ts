@@ -31,6 +31,15 @@ export const EXPIRY_SECONDS = Number((process.env.NEXT_PUBLIC_EXPIRY_SECONDS || 
 export const isFullyConfigured =
   ORACLE_ADDRESS_RAW !== "" && BASE_TOKEN_RAW !== "" && QUOTE_TOKEN_RAW !== "";
 
+// Curation (frontend-only registry): comma-separated list of base tokens the product shows.
+// Empty/absent => show every market on the wrapper (backwards compatible). Literal reference
+// only — Turbopack does not inline dynamic env access (see header note above).
+export const SELECTED_BASE_TOKENS = (process.env.NEXT_PUBLIC_SELECTED_BASE_TOKENS || "")
+  .trim()
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter((a) => /^0x[0-9a-f]{40}$/.test(a));
+
 export const hasWrapper = MARKET_ADDRESS_RAW !== "";
 
 // LP-pool vault (IRMarketVault). Empty → vault UI shows a "not configured" state.

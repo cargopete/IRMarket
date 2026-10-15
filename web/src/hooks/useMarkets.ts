@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import { IRMARKET_ABI } from "@/lib/abis/market";
 import { useCurrentBlock } from "./useCurrentBlock";
 import { useTokenMeta } from "./useTokenMeta";
-import { MARKET_ADDRESS, MARKET_ADDRESS_RAW, hasWrapper } from "@/lib/config";
+import { MARKET_ADDRESS, MARKET_ADDRESS_RAW, SELECTED_BASE_TOKENS, hasWrapper } from "@/lib/config";
 import type { MarketWithMeta } from "@/lib/types";
 
 /** Markets: factory registry when the wrapper is configured; else empty. */
@@ -70,20 +70,29 @@ export function useMarkets(): MarketWithMeta[] {
       .filter((m): m is MarketWithMeta => m !== null);
   }, [configuredForWrapper, marketsData, marketIds]);
 
+  // Curation (per-pair vault model, docs/architecture.md §7): keep only markets whose base
+  // token is on the selected list. Filter runs before the token-metadata multicall so
+  // un-curated pairs never hit the registry.
+  const visibleMarkets = useMemo(() => {
+    if (SELECTED_BASE_TOKENS.length === 0) return wrapperMarkets;
+    const set = new Set(SELECTED_BASE_TOKENS);
+    return wrapperMarkets.filter((m) => set.has(m.baseToken.toLowerCase()));
+  }, [wrapperMarkets]);
+
   const tokenAddresses = useMemo(
     () =>
-      wrapperMarkets.reduce<`0x${string}`[]>((acc, m) => {
+      visibleMarkets.reduce<`0x${string}`[]>((acc, m) => {
         if (!acc.includes(m.baseToken)) acc.push(m.baseToken);
         if (!acc.includes(m.quoteToken)) acc.push(m.quoteToken);
         return acc;
       }, []),
-    [wrapperMarkets],
+    [visibleMarkets],
   );
   const metaMap = useTokenMeta(tokenAddresses);
 
   const enriched = useMemo(
     () =>
-      wrapperMarkets.map((m) => {
+      visibleMarkets.map((m) => {
         const baseMeta = metaMap.get(m.baseToken.toLowerCase());
         const quoteMeta = metaMap.get(m.quoteToken.toLowerCase());
         const baseSymbol = baseMeta?.symbol ?? "???";
@@ -94,7 +103,7 @@ export function useMarkets(): MarketWithMeta[] {
           ticker: `${baseSymbol}/${quoteSymbol}`,
         };
       }),
-    [wrapperMarkets, metaMap],
+    [visibleMarkets, metaMap],
   );
 
   // Sort so markets still in their quote window come first (soonest-expiring first), then
