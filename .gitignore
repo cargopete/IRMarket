@@ -60,3 +60,4 @@ docs/audit/agent_logs/*
 # bot runtime logs
 bot_run.*.log
 bot_run.log
+.env*
