@@ -13,7 +13,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
           queries: {
             staleTime: 2000,
             refetchOnWindowFocus: false,
-            retry: 1,
+            // The public Monad testnet RPC rate-limits bursts of first-load reads (HTTP 429).
+            // A single immediate retry dies to the same throttle and pins token-meta reads
+            // at "???" until the user navigates; spaced retries let the reads recover in place.
+            retry: 3,
+            retryDelay: (attempt) => Math.min(500 * 2 ** attempt, 5000),
           },
         },
       }),

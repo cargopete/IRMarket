@@ -6,7 +6,8 @@ import { IRMARKET_ABI } from "@/lib/abis/market";
 import { useCurrentBlock } from "./useCurrentBlock";
 import { useTokenMeta } from "./useTokenMeta";
 import { MARKET_ADDRESS, MARKET_ADDRESS_RAW, hasWrapper } from "@/lib/config";
-import type { MarketWithMeta } from "@/lib/types";
+import { TOKEN_META_PENDING } from "@/lib/types";
+import type { Market, MarketWithMeta } from "@/lib/types";
 
 /** Markets: factory registry when the wrapper is configured; else empty. */
 export function useMarkets(): MarketWithMeta[] {
@@ -47,7 +48,7 @@ export function useMarkets(): MarketWithMeta[] {
     query: { enabled: configuredForWrapper && marketIds.length > 0 },
   });
 
-  const wrapperMarkets: MarketWithMeta[] = useMemo(() => {
+  const wrapperMarkets: Market[] = useMemo(() => {
     if (!configuredForWrapper) return [];
     return (marketsData ?? [])
       .map((entry, i) => {
@@ -63,11 +64,9 @@ export function useMarkets(): MarketWithMeta[] {
           feeBps: Array.isArray(r) ? (r[3] as bigint) : (r as unknown as { feeBps: bigint }).feeBps,
           expiryBlock: Array.isArray(r) ? (r[4] as bigint) : (r as unknown as { expiryBlock: bigint }).expiryBlock,
           createdAtBlock: Array.isArray(r) ? (r[5] as bigint) : (r as unknown as { createdAtBlock: bigint }).createdAtBlock,
-          name: "Liuliumei",
-          ticker: "LLM 06658.HK",
-        } satisfies MarketWithMeta;
+        } satisfies Market;
       })
-      .filter((m): m is MarketWithMeta => m !== null);
+      .filter((m): m is Market => m !== null);
   }, [configuredForWrapper, marketsData, marketIds]);
 
   const tokenAddresses = useMemo(
@@ -86,10 +85,14 @@ export function useMarkets(): MarketWithMeta[] {
       wrapperMarkets.map((m) => {
         const baseMeta = metaMap.get(m.baseToken.toLowerCase());
         const quoteMeta = metaMap.get(m.quoteToken.toLowerCase());
-        const baseSymbol = baseMeta?.symbol ?? "???";
-        const quoteSymbol = quoteMeta?.symbol ?? "???";
+        const baseSymbol = baseMeta?.symbol ?? TOKEN_META_PENDING;
+        const quoteSymbol = quoteMeta?.symbol ?? TOKEN_META_PENDING;
         return {
           ...m,
+          baseSymbol,
+          quoteSymbol,
+          baseDecimals: baseMeta?.decimals ?? 18,
+          quoteDecimals: quoteMeta?.decimals ?? 18,
           name: `${baseSymbol}/${quoteSymbol}`,
           ticker: `${baseSymbol}/${quoteSymbol}`,
         };

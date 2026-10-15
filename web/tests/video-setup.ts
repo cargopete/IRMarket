@@ -25,8 +25,9 @@ async function waitForServer(url: string, maxRetries = 90): Promise<void> {
 export default async function videoSetup(): Promise<void> {
   await baseSetup();
 
-  console.log("[VideoSetup] Starting next dev on :3000...");
-  const next = spawn("npx", ["next", "dev", "--port", "3000"], {
+  const port = Number(process.env.E2E_PORT ?? 3000);
+  console.log(`[VideoSetup] Starting next dev on :${port}...`);
+  const next = spawn("npx", ["next", "dev", "--port", String(port)], {
     cwd: WEB_DIR,
     shell: true,
     stdio: "pipe",
@@ -34,7 +35,7 @@ export default async function videoSetup(): Promise<void> {
   next.stdout?.on("data", (d: Buffer) => process.stdout.write(`[Next] ${d}`));
   next.stderr?.on("data", (d: Buffer) => process.stderr.write(`[Next] ${d}`));
 
-  await waitForServer("http://localhost:3000");
+  await waitForServer(`http://localhost:${port}`);
   console.log("[VideoSetup] next dev ready.");
   (globalThis as { __nextProcess?: unknown }).__nextProcess = next;
 }

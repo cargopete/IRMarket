@@ -126,10 +126,14 @@ test.describe.serial("LP Vault user flow (video)", () => {
       await page.waitForTimeout(2500);
     });
 
-    await test.step("6. V0.9 Market tab (event-derived positions)", async () => {
+    await test.step("6. Market tab — grouped per-asset rounds", async () => {
       await page.goto("/");
-      await expect(page.getByText(/HKD/).first()).toBeVisible({ timeout: 30000 });
-      await page.waitForTimeout(2000);
+      // Grouped market list: names resolve in place (shared token meta), one card per
+      // asset pair showing only the current round (past rounds are not listed).
+      await expect(page.getByText(/Long/).first()).toBeVisible({ timeout: 30000 });
+      await page.waitForTimeout(2500);
+      await page.screenshot({ path: "test-results/market-tab-grouped.png", fullPage: true });
+      await page.waitForTimeout(6000);
     });
   });
 });

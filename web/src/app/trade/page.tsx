@@ -5,10 +5,10 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { MarketCard } from "@/components/market/MarketCard";
 import { TradePanel } from "@/components/trade/TradePanel";
 import { useMarkets } from "@/hooks/useMarkets";
+import { useCurrentBlock } from "@/hooks/useCurrentBlock";
 import { useReferencePrice } from "@/hooks/useReferencePrice";
-import { useTokenMeta } from "@/hooks/useTokenMeta";
 import { BlockCountdown } from "@/components/market/BlockCountdown";
-import { formatPrice } from "@/lib/format";
+import { formatPrice, formatCountdown } from "@/lib/format";
 import { isFullyConfigured } from "@/lib/config";
 
 export default function TradePage() {
@@ -41,15 +41,40 @@ function TradeContent() {
     market && isFullyConfigured ? { base: market.baseToken, quote: market.quoteToken } : null,
   );
 
-  const metaMap = useTokenMeta(
-    market ? [market.baseToken, market.quoteToken] : [],
-  );
+  // Symbol/decimals come preloaded on each market (single shared token-meta read in useMarkets).
   const baseMeta = market
-    ? (metaMap.get(market.baseToken.toLowerCase()) ?? { symbol: "LLM", decimals: 18 })
+    ? { symbol: market.baseSymbol, decimals: market.baseDecimals }
     : { symbol: "LLM", decimals: 18 };
   const quoteMeta = market
-    ? (metaMap.get(market.quoteToken.toLowerCase()) ?? { symbol: "HKD", decimals: 18 })
+    ? { symbol: market.quoteSymbol, decimals: market.quoteDecimals }
     : { symbol: "HKD", decimals: 18 };
+
+  const blockNumber = useCurrentBlock();
+
+  // Rounds of the selected market's pair: live soonest-expiring first, past newest first.
+  const pairRounds = useMemo(() => {
+    if (!market) return null;
+    const base = market.baseToken.toLowerCase();
+    const quote = market.quoteToken.toLowerCase();
+    const pair = markets.filter(
+      (r) => r.baseToken.toLowerCase() === base && r.quoteToken.toLowerCase() === quote,
+    );
+    if (blockNumber === undefined) {
+      return { live: [...pair].sort((a, b) => Number(a.marketId) - Number(b.marketId)), past: [] };
+    }
+    const live = pair.filter((r) => r.expiryBlock > blockNumber)
+      .sort((a, b) => (a.expiryBlock < b.expiryBlock ? -1 : 1));
+    const past = pair.filter((r) => r.expiryBlock <= blockNumber)
+      .sort((a, b) => (a.expiryBlock > b.expiryBlock ? -1 : 1));
+    return { live, past };
+  }, [market, markets, blockNumber]);
+
+  const roundLabel = (expiryBlock: bigint): string => {
+    if (blockNumber === undefined) return "";
+    const left = expiryBlock - blockNumber;
+    if (left <= 0n) return " · expired";
+    return ` · ~${formatCountdown(left)}`;
+  };
 
   if (!market) {
     return <p className="text-sm text-text-dim">Market not found.</p>;
@@ -65,17 +90,27 @@ function TradeContent() {
             <span className="rounded-md bg-card-border/40 px-2 py-0.5 text-xs text-text-dim">
               {market.ticker}
             </span>
-            {markets.length > 1 && (
+            {pairRounds !== null && pairRounds.live.length + pairRounds.past.length > 1 && (
               <select
                 className="rounded-lg border border-card-border bg-card px-2 py-1 text-xs"
                 value={market.marketId.toString()}
                 onChange={(e) => onMarketChange(e.target.value)}
+                aria-label="Select round (expiry)"
               >
-                {markets.map((item) => (
-                  <option key={item.marketId.toString()} value={item.marketId.toString()}>
-                    {item.name} ({item.ticker})
-                  </option>
-                ))}
+                <optgroup label="Live rounds">
+                  {pairRounds.live.map((r) => (
+                    <option key={r.marketId.toString()} value={r.marketId.toString()}>
+                      #{r.marketId.toString()} · live{roundLabel(r.expiryBlock)}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Past rounds">
+                  {pairRounds.past.map((r) => (
+                    <option key={r.marketId.toString()} value={r.marketId.toString()}>
+                      #{r.marketId.toString()} · expired
+                    </option>
+                  ))}
+                </optgroup>
               </select>
             )}
           </div>
