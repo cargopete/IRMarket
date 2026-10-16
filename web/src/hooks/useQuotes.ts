@@ -8,7 +8,7 @@ import { useCurrentBlock } from "./useCurrentBlock";
 import { ORACLE_ADDRESS, isFullyConfigured } from "@/lib/config";
 import type { Quote } from "@/lib/types";
 
-const MAX_TRACKED_QUOTES = 200; // demo sanity cap
+const MAX_TRACKED_QUOTES = 50; // demo sanity cap
 
 /** Latest quoteId from the oracle. */
 export function useNextQuoteId() {
