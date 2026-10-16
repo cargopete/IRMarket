@@ -157,9 +157,19 @@ class BotContext:
     def __init__(self, shared: Optional[dict] = None) -> None:
         shared = shared or {}
         rpc = os.getenv("RPC_HTTP_URL", "https://testnet-rpc.monad.xyz")
-        self.w3 = Web3(Web3.HTTPProvider(rpc))
-        if not self.w3.is_connected():
-            raise RuntimeError(f"RPC unreachable: {rpc}")
+        # Per-request timeout so a stalled connection raises (and is retried by the
+        # loop) rather than hanging the bot forever.
+        self.w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 15}))
+        # The endpoint drops TLS connections intermittently (SSLEOFError, ~15% of
+        # calls), so a single is_connected() probe is unreliable — retry before
+        # declaring the RPC dead.
+        for attempt in range(5):
+            if self.w3.is_connected():
+                break
+            log.warning("RPC not ready (attempt %d/5): %s", attempt + 1, rpc)
+            time.sleep(2)
+        else:
+            raise RuntimeError(f"RPC unreachable after retries: {rpc}")
 
         self.pk = os.environ["PRIVATE_KEY"]
         self.account = self.w3.eth.account.from_key(self.pk)
