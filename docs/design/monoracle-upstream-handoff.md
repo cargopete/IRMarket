@@ -93,9 +93,11 @@ alias are unchanged.
 > ⚠️ The A verifier bot needs a funded MON balance (its wallet is not the deployer). Top it up from the
 > deployer wallet if it logs `Signer had insufficient balance`.
 >
-> ✅ **Demo LP seeded** (2026-10-15): a dedicated demo-LP wallet deposited the first 5,000 HKD into the
-> A vault — `/vault` now shows `Equity 5,000 HKD · share price 1.0`. Identity recorded in
-> `deployment-vault.json → demoLp` (key kept outside the repo).
+> ✅ **Demo LP seeded & settled** (2026-10-16): the dedicated demo-LP wallet deposited the first
+> 5,000 HKD, then topped up to **15,000 HKD** (`equity 15,002` after the demo, share price 1.0
+> throughout). Both hedged directions settled on-chain: `LONG 100` + `SHORT 100` (30-block tenor,
+> `payout 99.0 + 99.0`, 1% fee retained) — proof the pool pays in full both ways. Identity + demo
+> txs recorded in `deployment-vault.json → demoLp*` (key kept outside the repo).
 
 ## 3. Remaining — the Production cutover
 
