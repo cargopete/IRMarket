@@ -3,6 +3,7 @@
 import { useReadContract, useReadContracts } from "wagmi";
 import { useMemo } from "react";
 import { MONORACLE_ABI } from "@/lib/abis/oracle";
+import { decodeQuote } from "@/lib/decode";
 import { useCurrentBlock } from "./useCurrentBlock";
 import { ORACLE_ADDRESS, isFullyConfigured } from "@/lib/config";
 import type { Quote } from "@/lib/types";
@@ -58,26 +59,24 @@ export function useQuotes(pair: { base: `0x${string}`; quote: `0x${string}` } | 
     (data ?? []).forEach((entry, i) => {
       const r = entry.result;
       if (!r || typeof r === "undefined") return;
-      const [provider, baseToken, quoteToken, baseAmount, quoteAmount, price, startSlot, expiryBlock, settledSlot, status] = r as readonly [
-        `0x${string}`, `0x${string}`, `0x${string}`, bigint, bigint, bigint, number, number, number, number,
-      ];
-      if (provider === "0x0000000000000000000000000000000000000000") return;
+      const q = decodeQuote(r as readonly unknown[]);
+      if (q.provider === "0x0000000000000000000000000000000000000000") return;
       if (pair) {
-        if (baseToken.toLowerCase() !== pair.base.toLowerCase()) return;
-        if (quoteToken.toLowerCase() !== pair.quote.toLowerCase()) return;
+        if (q.baseToken.toLowerCase() !== pair.base.toLowerCase()) return;
+        if (q.quoteToken.toLowerCase() !== pair.quote.toLowerCase()) return;
       }
       list.push({
         quoteId: quoteIds[i],
-        provider,
-        baseToken,
-        quoteToken,
-        baseAmount,
-        quoteAmount,
-        price,
-        startSlot,
-        settledSlot,
-        expiryBlock: BigInt(expiryBlock),
-        status: status as Quote["status"],
+        provider: q.provider,
+        baseToken: q.baseToken,
+        quoteToken: q.quoteToken,
+        baseAmount: q.baseAmount,
+        quoteAmount: q.quoteAmount,
+        price: q.price,
+        startSlot: q.startSlot,
+        settledSlot: q.settledSlot,
+        expiryBlock: q.expiryBlock,
+        status: q.status,
       });
     });
     return list;
