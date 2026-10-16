@@ -61,7 +61,9 @@ export function useMarkets(): MarketWithMeta[] {
           baseToken: base,
           quoteToken: quote,
           marketMaker: Array.isArray(r) ? (r[2] as `0x${string}`) : (r as unknown as { marketMaker: `0x${string}` }).marketMaker,
-          feeBps: Array.isArray(r) ? (r[3] as bigint) : (r as unknown as { feeBps: bigint }).feeBps,
+          // uint16 → viem decodes it as a JS number, not a bigint; coerce so the
+          // declared `bigint` type holds at runtime (computeFee does bigint math).
+          feeBps: BigInt(Array.isArray(r) ? (r[3] as bigint | number) : (r as unknown as { feeBps: bigint | number }).feeBps),
           expiryBlock: Array.isArray(r) ? (r[4] as bigint) : (r as unknown as { expiryBlock: bigint }).expiryBlock,
           createdAtBlock: Array.isArray(r) ? (r[5] as bigint) : (r as unknown as { createdAtBlock: bigint }).createdAtBlock,
         } satisfies Market;
