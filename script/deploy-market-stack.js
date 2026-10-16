@@ -62,7 +62,7 @@ const MINT_BASE = ethers.parseEther("1000000");
 const MINT_QUOTE = ethers.parseEther("10000000");
 const MAX_UINT = ethers.MaxUint256;
 
-const GAS = { mint: 150_000, approve: 100_000, createMarket: 2_000_000, fallbackDeploy: 3_500_000 };
+const GAS = { mint: 150_000, approve: 100_000, createMarket: 2_000_000, fallbackToken: 2_000_000, fallbackWrapper: 2_500_000, fallbackVault: 3_000_000 };
 
 function loadArtifact(rel) {
   return JSON.parse(fs.readFileSync(path.join(rootDir, "artifacts", "contracts", rel), "utf8"));
@@ -84,6 +84,8 @@ function parseAssets(raw) {
   if (out.length === 0) throw new Error("ASSETS is empty");
   return out;
 }
+
+const SHOW_LEN = (s) => Math.min(s.length, 48);
 
 // --- pre-flight gate: the oracle MUST fingerprint as upstream "A" -----------------
 async function gateOracle(provider) {
@@ -121,7 +123,6 @@ async function gateOracle(provider) {
   console.log("  gate: PASS\n");
   return addr;
 }
-const SHOW_LEN = (s) => Math.min(s.length, 48);
 
 async function main() {
   const assets = parseAssets(ASSETS_RAW);
@@ -175,9 +176,9 @@ async function main() {
   let nonce = BigInt(await provider.send("eth_getTransactionCount", [addr, "pending"]));
   const txHashes = {};
 
-  async function estimateGas(txReq) {
+  async function estimateGas(txReq, fallback = GAS.fallbackToken) {
     try { return (await provider.estimateGas({ ...txReq, from: addr })) * 120n / 100n; }
-    catch (e) { console.warn(`  ! estimateGas failed (${e.shortMessage || e.message}); using fallback`); return BigInt(GAS.fallbackDeploy); }
+    catch (e) { console.warn(`  ! estimateGas failed (${e.shortMessage || e.message}); using ${fallback} gas fallback`); return BigInt(fallback); }
   }
   async function send(label, txReq) {
     try {
@@ -190,10 +191,10 @@ async function main() {
       throw e;
     }
   }
-  async function deploy(label, artifact, args = []) {
+  async function deploy(label, artifact, args = [], fallback = GAS.fallbackToken) {
     const factory = new ethers.ContractFactory(artifact.abi, artifact.bytecode, wallet);
     const txReq = await factory.getDeployTransaction(...args);
-    const gasLimit = await estimateGas(txReq);
+    const gasLimit = await estimateGas(txReq, fallback);
     const rc = await send(label, { ...txReq, gasLimit });
     return { address: rc.contractAddress, abi: artifact.abi, txHash: rc.hash };
   }
@@ -223,7 +224,7 @@ async function main() {
   if (wrapperAddr) {
     market = { address: wrapperAddr, abi: marketArtifact.abi, txHash: null, reused: true };
   } else {
-    market = { ...await deploy("IRMarket", marketArtifact, [oracleAddr]), reused: false };
+    market = { ...await deploy("IRMarket", marketArtifact, [oracleAddr], GAS.fallbackWrapper), reused: false };
     txHashes.market = market.txHash;
   }
   txHashes.market = txHashes.market || (market.reused ? "0x0 (reused)" : txHashes.market);
@@ -300,7 +301,7 @@ async function main() {
     }
   }
   if (!vault) {
-    vault = await deploy("IRMarketVault", vaultArtifact, [oracleAddr, first.baseToken, quote.address, FEE_BPS]);
+    vault = await deploy("IRMarketVault", vaultArtifact, [oracleAddr, first.baseToken, quote.address, FEE_BPS], GAS.fallbackVault);
     txHashes.vault = vault.txHash;
   }
   first.vault = vault.address; // per-pair binding (MVP ships assets[0] only)
