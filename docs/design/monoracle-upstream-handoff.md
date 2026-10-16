@@ -1,6 +1,6 @@
 # Monoracle Upstream Migration — Handoff
 
-> **Read this first.** Companion to `docs/design/monoracle-upstream-migration-plan.md` (the plan)
+> **Read this first.** Companion to `docs/plan/monoracle-upstream-migration-plan.md` (the plan)
 > and `docs/design/monoracle-version-survey.md` (the version survey).
 > **Branch:** `feat/monoracle-upstream` (worktree). **Commits:** plan+doctor, then the P1–P4 impl.
 

@@ -3,7 +3,7 @@
 > Source of truth for "which Monoracle build is on-chain where, and which one IRMarket
 > **consumes**". Everything else (handoff, plan, AGENTS.md, PRD) cites this file — keep it current
 > when any oracle deployment changes, and re-verify with `node script/oracle-doctor.js` before
-> every deploy. Companion: `monoracle-upstream-handoff.md`, `monoracle-upstream-migration-plan.md`.
+> every deploy. Companion: `monoracle-upstream-handoff.md`, `../plan/monoracle-upstream-migration-plan.md`.
 
 **The rule:** if the repo ABI and the deployed oracle disagree → **migrate the oracle, never bend
 the ABI**. IRMarket-side scripts must **never** deploy Monoracle (`deploy-market-stack.js` gates on

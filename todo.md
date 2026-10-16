@@ -17,3 +17,15 @@ _Tracking convention: this file is only an index — each item references a GH i
 
 - GH: https://github.com/dixia/IRMarket/issues/11
 - Status: **OPEN** — spec/tools complete; implementation awaits post-judging review (planned first task of the V0.1 board)
+
+## One market per pair (Option B): stop per-round createMarket; rounds keyed by quote expiry
+
+- GH: https://github.com/dixia/IRMarket/issues/12
+- Plan: `docs/plan/one-market-per-pair-plan.md`
+- Status: **TODO** — plan complete (**Not started**); implementation pending.
+
+## Merge the real price-feed change (`feat/real-price-feed` → `feat/monoracle-upstream`)
+
+- GH: https://github.com/dixia/IRMarket/issues/13
+- Spec: `docs/design/bot-real-price-feed-spec.md` (in the `IRMarket-pricefeed` worktree)
+- Status: **TODO** — changes uncommitted in that worktree; commit + merge pending.

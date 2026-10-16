@@ -1,6 +1,6 @@
 # Monoracle Upstream Migration — Plan (Option A)
 
-> **Status:** DRAFT plan. **Worktree/branch:** `feat/monoracle-upstream`. **Synced to `main` @ `2fe4641`.**
+> **Status:** **In progress** — code + tests landed on `feat/monoracle-upstream`; Production cutover pending (see `docs/design/monoracle-upstream-handoff.md`). **Synced to `main` @ `2fe4641`.**
 > **Target oracle:** `0x151286e6Ca5F5CA20910dE90C0DCEAa9fd71f2c8` (current upstream).
 > **One-line goal:** move IRMarket off the dead **fork** oracle (`0xb652…`) onto the maintained **upstream** Monoracle — without changing what the product *does*.
 
