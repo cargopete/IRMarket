@@ -1,0 +1,38 @@
+# Vercel CLI deploys run from the repo root (project Root Directory = web/),
+# so the upload would otherwise include ~1.4 GB of local-only artifacts.
+# Only web/ (plus root package files) matters for the build.
+
+# dependencies / build output
+node_modules
+.next
+out
+test-results
+
+# vcs / vercel state
+.git
+.vercel
+
+# hardhat local artifacts
+artifacts
+cache
+
+# secrets — never upload local env files (web/.env.local holds a QuikNode key)
+.env
+.env.*
+*.env
+
+# local-only trees (not part of the web build)
+docs
+bot
+test
+script
+contracts
+tools
+__pycache__
+.playwright-mcp
+
+# binaries / logs
+*.pptx
+*.pdf
+*.log
+*.zip

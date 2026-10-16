@@ -22,7 +22,7 @@ cache/compile-cache.json
 /node_modules
 deployment.json
 deployment-vault.json
-deployment-assets.json
+deployment-assets*.json
 .next/
 bot/.env
 bot/.venv/
@@ -64,3 +64,7 @@ bot_run.log
 
 # LP demo run logs (temp harness)
 lp_demo.*.log
+
+# Office lock files / backup decks
+~$*.pptx
+*.pptx.bak
