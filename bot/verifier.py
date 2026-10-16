@@ -250,11 +250,22 @@ def load_env_pair() -> PairConfig:
 
 
 def resolve_pairs(explicit: Optional[str] = None) -> tuple[dict, list[PairConfig]]:
-    """Pick multi-asset vs legacy single-pair config. Multi-asset wins when the
-    file exists and lists at least one asset; otherwise fall back to env."""
+    """Pick multi-asset vs legacy single-pair config.
+
+    Multi-asset (assets file) wins when ASSETS_FILE is set and the file lists at
+    least one asset. If ASSETS_FILE is set but the file is missing/empty, fail
+    loudly: silently falling back to `load_env_pair()` surfaced a missing file as
+    a confusing `KeyError: 'MONITORED_PAIRS'`."""
     loaded = load_asset_configs(explicit)
     if loaded is not None:
         return loaded
+    configured = explicit or os.getenv("ASSETS_FILE")
+    if configured:
+        raise RuntimeError(
+            f"ASSETS_FILE='{configured}' not found (or empty) at "
+            f"{_resolve_assets_path(explicit)} — create it, or unset ASSETS_FILE "
+            f"to use the legacy MONITORED_PAIRS config"
+        )
     return {}, [load_env_pair()]
 
 
