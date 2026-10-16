@@ -167,3 +167,50 @@ node script/deploy-market-stack.js
 - The era **fork bot** (`../IRMarket`, deployer wallet `0xF5Cf…`) is still running against the fork. The
   **A-stack bot** (this worktree, wallet `0x5ceF21c2…`, `bot/.env`) runs in parallel — different key, so
   no nonce contention. Stop the fork bot only at cutover.
+
+---
+
+## 7. Handoff — LP option-premium pricing exploration (2026-10-16)
+
+> **Read-me for the next agent/reviewer.** Out of PR #10's migration scope: we explored whether the
+> LP pool can charge a **market-priced option premium** (BSM) for short-expiry ATM positions instead
+> of the flat 1% spread — a design gap registered on `dixia/IRMarket#9` (comment 2026-10-16). The full
+> spec + measurements live in `docs/design/lp-pool-premium-pricing-spec.md`.
+
+### What exists now (all on PR #10 branch, committed)
+
+| Artifact | What it is | NOT |
+|---|---|---|
+| `docs/design/lp-pool-premium-pricing-spec.md` | Full pricing spec: on-chain infra inventory, **measured** gas costs, options A (on-chain BSM) / **B (provider-priced premium + cheap on-chain bounds — recommended)** / C (lookup grid), vault-contract change plan (premium decoupled from at-risk `N`, premium → LP equity, 2N cap untouched) | it is NOT implemented in the contracts |
+| `contracts/probe/BsmPricingProbe.sol` + `script/probe/gas-probe.js` | THROWAWAY gas measurement (labeled "NEVER wire into product") | not a product contract; never referenced by imports |
+| `tools/backtest/premium-backtest.js` + `docs/design/lp-pool-premium-backtest-2026-10-16.csv` | Re-runnable backtest over real settled NVDA/HKD history (reads 1.63 days of `QuoteSettledValid` + `QuoteSubmitted` for pair attribution; RPC via `$env:RPC_URL` only — no keys committed) | no on-chain writes |
+
+### Key findings (so the next session doesn't re-derive)
+
+1. **On-chain infra can price it.** Inputs: canonical price (S), block tenor (T at 0.3 s/block), 2N cap
+   envelope. The one missing input — volatility — is observable from settled-price history. Gas cost of a
+   full-precision BSM call in WAD math: **+9–11% on a typical ATM `openPosition`** (294,962 gas baseline),
+   worst deep-OTM branch **+23.6%**. OZ v5.6 ships NO fractional `ln`/`exp` — the probe hand-rolls them
+   (+ A&S 26.2.17 Φ, ~1e-7 error); all tuple values matched the JS reference ≤ 1e-6.
+2. **Vol data layer must join settled→submitted ids.** `QuoteSettledValid` carries NO pair field; the
+   backtest joins settled `quoteId` against `QuoteSubmitted` (topic3 = baseToken). Reuse this pattern for
+   any on-chain σ feed.
+3. **Backtest (15 real rounds, 2026-10-15 sample): at realized σ ≈ 1.44%/round (~0.57% BSM premium) the
+   pool **earns less** than the flat 1%** (`BSM net −9.05 HKD` vs `flat −3.50 HKD` over the same rounds;
+   even σ×1.5 nets −5.32). Seller income is a bet that **charged IV ≥ realized vol + margin**; the
+   recommended option-B bounds should envelope `IV_floor ≈ 1.2–1.5× realized vol`, and V1 pricing should
+   track implied, not realized, vol. ⚠️ 15 rounds is direction-only evidence — re-run after the demo
+   accumulates a clean week (`node tools/backtest/premium-backtest.js` with `$env:RPC_URL` set).
+4. **Vault side** (spec §4, no code): `openPosition` gains a market-priced `premium` parameter; premium
+   flows to LP equity as income; the at-risk `N` decouples from the trader's posted capital; the
+   `pendingPayout ≤ balance` invariant and the 2N cap stay as-is (solvency proof unchanged).
+5. **1% flat remains live and fine for the judging demo** (and it actually out-earned BSM-at-realized-vol
+   in our sample). Nothing in this exploration blocks P5 or the cutover.
+
+### Open decisions for the post-#9 review
+
+- Which design (A/B/C) to implement for V1 — recommendation: **B** (argued from measured gas + the
+  ownerless/no-feed convention).
+- σ source governance: per-pair provider-supplied σ with on-chain bounds, vs a fixed σ registry
+  with timelock, vs purely realized-vol-derived bounds (§3/§6 of the spec).
+- Whether the 1% spread survives as an allocation fee ON TOP of the market premium.
