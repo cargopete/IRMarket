@@ -12,3 +12,8 @@ _Tracking convention: this file is only an index — each item references a GH i
 
 - GH: https://github.com/dixia/IRMarket/issues/9
 - Status: **OPEN — blocked/parked** (deliberate; not blocking P5 migration or demo)
+
+## V1 feature: market-priced option premium for the LP vault (BSM: spec + probe + backtest done on PR #10; implementation open)
+
+- GH: https://github.com/dixia/IRMarket/issues/11
+- Status: **OPEN** — spec/tools complete; implementation awaits post-judging review (planned first task of the V0.1 board)
