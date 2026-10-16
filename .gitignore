@@ -61,3 +61,6 @@ docs/audit/agent_logs/*
 bot_run.*.log
 bot_run.log
 .env*
+
+# LP demo run logs (temp harness)
+lp_demo.*.log

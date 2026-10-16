@@ -401,18 +401,28 @@ Tokens in `src/app/globals.css` per PRD §5.1:
 
 ### 7.1 Gas is charged by limit, not usage
 
-Monad bills `gas_limit × price`; inflated limits are real cost. Fixed limits (in
-`useTrade.ts`, sc-tech-spec §7):
+Monad bills `gas_limit × price_per_gas`; inflated limits are real cost. Fixed limits
+(`useTrade.ts`, `useVaultTrade.ts`, `web/src/lib/config.ts`):
 
-| Op | Recommended limit | Notes |
-|---|---|---|
-| `openLong` / `openShort` (wrapper) | **450,000** | wrapper transfers + oracle veto ≈ 250–300k |
-| `vetoUnderpriced` / `vetoOverpriced` (direct close) | 300,000 | upstream-consistent |
-| approve (token → wrapper or oracle) | 60,000 | |
-| (bot-only) submitQuote / settle / withdraw | 600k / 150k / 200k | not used by UI |
+| Op | Measured gasUsed | Limit | Notes |
+|---|---|---|---|
+| `openLong` / `openShort` (wrapper) | 138,547–152,148 (mock; ~170,000 real oracle) | **260,000** | wrapper transfers + oracle veto |
+| `vetoUnderpriced` / `vetoOverpriced` (direct close) | 77,122 (mock; ~86,000 real oracle) | **160,000** | upstream oracle path |
+| approve (token → wrapper or oracle) | 33,586 | **60,000** | cold `0 → max` |
+| vault `deposit` / `withdraw` | 132,206 / 61,663 | **200,000 / 120,000** | |
+| vault `openPosition` | 233,385–267,573 | **400,000** | price read + position write |
+| vault `settlePosition` | 83,747 | **150,000** | |
+| (bot-only) submitQuote / settle / withdraw / createMarket | see sc-tech-spec §7 | 400k / 100k / 120k / 250k | not used by UI |
 
-Pass a fixed `gasLimit` in the send params; do **not** rely on `estimateGas` + wallet default
-(a revert can inflate the limit → overbilling). Surface reverts via error mapping (§9).
+Pass a fixed `gasLimit` in the send params; do **not** rely on `estimateGas` + wallet
+default (a revert can inflate the limit → overbilling). Surface reverts via error
+mapping (§9).
+
+**Do not tune from receipts.** On Monad `eth_getTransactionReceipt.gasUsed` mirrors the
+limit that was sent, so a receipt says nothing about actual usage — the only trustworthy
+measurements are `eth_estimateGas` and `npx hardhat run script/gas-report.js`.
+`test/gas.test.js` pins these limits to measured usage and fails on drift in either
+direction.
 
 ### 7.2 Reserve balance
 

@@ -235,7 +235,7 @@ IRMarket 是部署在 Monad 区块链上的**奇异标的链上多空市场**：
 
 #### 4.1.2 IRMarket 薄层（✅ D-11/D-14：费用包裹 + 工厂）
 
-- `createMarket(base, quote, expiryBlock, feeBps, marketMaker)` 工厂注册——**不去重**（D-14）：同一标的可并存多个市场（不同到期/费率），每轮 = 新 marketId；创建时对 oracle `forceApprove` 两种代币（gas 上限 ≈2M）
+- `createMarket(base, quote, expiryBlock, feeBps, marketMaker)` 工厂注册——**不去重**（D-14）：同一标的可并存多个市场（不同到期/费率），每轮 = 新 marketId；创建时对 oracle `forceApprove` 两种代币，但**仅当 oracle 尚未持有额度时**才发（幂等，spender/amount 不变；未加保护前每次重复批准白烧 ~40k gas）。`Market` 的 `feeBps`/`expiryBlock`/`createdAtBlock` 打包进同一 slot。gas 上限 ≈250k（Monad 按 limit 计费，实测见 sc-tech-spec §7）
 - **费用包裹（D-11/D-16）**：入口函数按 HKD 名义额扣 1%（看涨加付入端、看跌从收付出扣）→ 代用户执行 veto（看涨/看跌两个入口函数）
 - `openLong`/`openShort`/`createMarket` 入口 + `markets`/`nextMarketId` 读取 + `version()`（返回 `"0.9.0-vetomarket"` 标注构建）
 - **事件索引**：`MarketCreated` 索引 `marketId`/`baseToken`/`quoteToken`（`marketMaker`/`expiryBlock`/`feeBps` 在 data）；`VetoWrapped` 索引 `quoteId`/`marketId`/`trader`（`side`/金额/`fee` 在 data）——与 `web/src/lib/abis/market.ts` 一致
@@ -472,4 +472,4 @@ Vault 页（canonical 价格头 + MVP 限制横幅）
 - 单元 fixture（前端与合约同根）：`D=100 → fee=1, N=99, maxPayout=198`；`S0=100→S1=150 → payout=148.5`；LP equity `1000 → 902（开仓）→ 951.5（结算）`
 - `npm run test:unit` = 17 通过；Playwright E2E = **20/20**（含 13-vault 三用例）
 - 用户流程录像：`docs/product/videos/lp-vault-user-flow.webm`（开仓 → 价格 130→150 → Open PnL 转正 +1.x）
-- 测试网部署：vault `0xE4B88dc2…52f7`、oracle `0xb6523DA6…`、NVDA `0xD092361E…`、HKD `0x34675029…`（生产环境 = Vercel Production env + `deployment-vault.json`）
+- 测试网部署（**upstream (A) consumer stack**，已锚定 Vercel Preview；`irmarket.xyz` 切换前仍为 fork 栈，地址普查见 `docs/design/monoracle-version-survey.md`）：vault `0x95a74C58…67dD3`、oracle `0x80732110…9f4D`（上游构建**被消费**，永不重部署）、NVDA `0xda9CF5A6…DE17`、HKD `0x36448Ef0…4F04`；演示 LP 已播种（vault `Equity 5,000 HKD`）

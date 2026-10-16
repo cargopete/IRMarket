@@ -47,11 +47,15 @@ premium, payoff and equity figure is in `settlementToken`.
 
 | Contract | Address |
 |---|---|
-| `IRMarketVault` | `0xE4B88dc23F7660957ce5bDFF100882384b2F52f7` |
-| Monoracle (V0.9 app oracle) | `0xb6523DA6f177dB25d766a27575624B3e1fe0a00e` |
-| `priceBase` token (NVDA) | `0xD092361E5Cb54Db4CE69a856086108B0862473b4` |
-| `settlementToken` (HKD) | `0x34675029742e7E5Fea3637F68c911414a47F9752` |
+| `IRMarketVault` | `0x95a74C58bbF1F8F56c02d27Aecc0024D98e67dD3` |
+| Monoracle (**upstream build, consumed**) | `0x807321100748d75a618e508de214123CB77C9f4D` |
+| `priceBase` token (NVDA) | `0xda9CF5A68cc2d8EFA5940db4094b6377D389DE17` |
+| `settlementToken` (HKD) | `0x36448Ef080ba5fa251e1a9bd61782786f9e24F04` |
 | Deployer / operator | `0xF5Cf3950CA8055408648Ce5c155B2b3967269fcE` |
+
+> A-stack (upstream consumer) — wired to Vercel **Preview**; `irmarket.xyz` still serves the fork
+> stack (`vault 0xE4B88d…`, oracle `0xb652…`) until the Production cutover. Pin record:
+> `docs/design/monoracle-version-survey.md`.
 
 - These are also written to `deployment-vault.json` (repo root, gitignored) by
   `script/deploy-vault-rpc.js`.

@@ -17,14 +17,16 @@
 
 ### 1. Environment
 
-Contracts (Monad testnet, deployed & verified):
+Contracts (Monad testnet — **upstream (A) consumer stack**; `irmarket.xyz` still serves the legacy
+fork stack until the Production cutover; survey record:
+`docs/design/monoracle-version-survey.md`):
 
 | Contract | Address |
 |---|---|
-| Monoracle (oracle fork, D-13) | `0xb6523DA6f177dB25d766a27575624B3e1fe0a00e` |
-| IRMarket (factory + 1% fee wrapper) | `0x03b181080878515a01c5DA3EB262bf07C595dFef` |
-| LLM (base token) | `0xC065c5C371DFfcA7C167418810498506c57D1F35` |
-| HKD (quote token) | `0x34675029742e7E5Fea3637F68c911414a47F9752` |
+| Monoracle (upstream build, **consumed** — per-quote window D-13, `MAXVS=12000`) | `0x807321100748d75a618e508de214123CB77C9f4D` |
+| IRMarket (factory + 1% fee wrapper) | `0x39A14B5d0C049525C3C42dE57E6d4553B0df5C99` |
+| NVDA (base token — of 4 curated assets incl. GLM/SNDK/DEEPSEEK) | `0xda9CF5A68cc2d8EFA5940db4094b6377D389DE17` |
+| HKD (quote token) | `0x36448Ef080ba5fa251e1a9bd61782786f9e24F04` |
 
 ### 2. Start a fresh demo round (right before the demo)
 

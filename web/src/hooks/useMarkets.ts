@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import { IRMARKET_ABI } from "@/lib/abis/market";
 import { useCurrentBlock } from "./useCurrentBlock";
 import { useTokenMeta } from "./useTokenMeta";
-import { MARKET_ADDRESS, MARKET_ADDRESS_RAW, hasWrapper } from "@/lib/config";
+import { MARKET_ADDRESS, MARKET_ADDRESS_RAW, SELECTED_BASE_TOKENS, hasWrapper } from "@/lib/config";
 import { TOKEN_META_PENDING } from "@/lib/types";
 import type { Market, MarketWithMeta } from "@/lib/types";
 
@@ -100,17 +100,24 @@ export function useMarkets(): MarketWithMeta[] {
     [wrapperMarkets, metaMap],
   );
 
+  // Curation (frontend-only registry, per-pair vault model - docs/architecture.md §7):
+  // keep only markets whose base token is on the selected list; absent/empty shows all.
+  const curated = useMemo(() => {
+    if (SELECTED_BASE_TOKENS.length === 0) return enriched;
+    const set = new Set(SELECTED_BASE_TOKENS);
+    return enriched.filter((m) => set.has(m.baseToken.toLowerCase()));
+  }, [enriched]);
   // Sort so markets still in their quote window come first (soonest-expiring first), then
   // expired ones last. A market is "active" while its expiryBlock is still ahead of now.
   const sorted = useMemo(() => {
-    if (blockNumber === undefined) return enriched;
-    return [...enriched].sort((a, b) => {
+    if (blockNumber === undefined) return curated;
+    return [...curated].sort((a, b) => {
       const aActive = a.expiryBlock > blockNumber ? 0 : 1;
       const bActive = b.expiryBlock > blockNumber ? 0 : 1;
       if (aActive !== bActive) return aActive - bActive;
       return a.expiryBlock < b.expiryBlock ? -1 : a.expiryBlock > b.expiryBlock ? 1 : 0;
     });
-  }, [enriched, blockNumber]);
+  }, [curated, blockNumber]);
 
   return sorted;
 }

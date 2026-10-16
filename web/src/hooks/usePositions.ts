@@ -5,6 +5,7 @@ import { usePublicClient } from "wagmi";
 import { decodeEventLog, getAddress, type Address } from "viem";
 import type { AbiEvent } from "viem";
 import { MONORACLE_ABI } from "@/lib/abis/oracle";
+import { decodeQuote } from "@/lib/decode";
 import { IRMARKET_ABI } from "@/lib/abis/market";
 import { useCurrentBlock } from "./useCurrentBlock";
 import { MARKET_ADDRESS, ORACLE_ADDRESS, QUOTE_TOKEN, hasWrapper, isFullyConfigured } from "@/lib/config";
@@ -33,7 +34,7 @@ async function readQuote(
   publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
   quoteId: bigint,
 ): Promise<{ price: bigint; baseAmount: bigint; quoteAmount: bigint; expiryBlock: bigint; settledSlot: bigint; provider: `0x${string}`; baseToken: `0x${string}`; quoteToken: `0x${string}` } | null> {
-  const q = await publicClient
+  const raw = await publicClient
     .readContract({
       address: ORACLE_ADDRESS as `0x${string}`,
       abi: MONORACLE_ABI,
@@ -41,30 +42,20 @@ async function readQuote(
       args: [quoteId],
     })
     .catch(() => null);
-  if (!q) return null;
-  // quotes() tuple: provider, baseToken, quoteToken, baseAmount, quoteAmount, price,
-  // startSlot(uint32), expiryBlock(uint32), settledSlot(uint32), status(uint8)
-  const [provider, baseToken, quoteToken, baseAmount, quoteAmount, price, , expiryBlock, settledSlot] = q as readonly [
-    `0x${string}`,
-    `0x${string}`,
-    `0x${string}`,
-    bigint,
-    bigint,
-    bigint,
-    number,
-    number,
-    number,
-  ];
-  if (provider === getAddress("0x0000000000000000000000000000000000000000")) return null;
+  if (!raw) return null;
+  // Name-based decode: field indexes are derived from the doctor-gated ABI at
+  // runtime (never bend the declared order — see web/src/lib/decode.ts).
+  const q = decodeQuote(raw as readonly unknown[]);
+  if (q.provider === getAddress("0x0000000000000000000000000000000000000000")) return null;
   return {
-    provider: provider as `0x${string}`,
-    baseToken: baseToken as `0x${string}`,
-    quoteToken: quoteToken as `0x${string}`,
-    baseAmount: baseAmount as bigint,
-    quoteAmount: quoteAmount as bigint,
-    price: price as bigint,
-    expiryBlock: BigInt(expiryBlock),
-    settledSlot: BigInt(settledSlot),
+    provider: q.provider,
+    baseToken: q.baseToken,
+    quoteToken: q.quoteToken,
+    baseAmount: q.baseAmount,
+    quoteAmount: q.quoteAmount,
+    price: q.price,
+    expiryBlock: BigInt(q.expiryBlock),
+    settledSlot: BigInt(q.settledSlot),
   };
 }
 

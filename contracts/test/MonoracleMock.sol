@@ -49,7 +49,12 @@ contract MonoracleMock is IMonoracle {
         }
     }
 
+    /// @dev Upstream-consistent window constants (mirror ../monoracle Monoracle.sol).
+    uint32 public constant VERIFICATION_SLOTS = 2;
+    uint32 public constant MAX_VERIFICATION_SLOTS = 12000;
+
     error ExpiryMustBeFuture();
+    error ExpiryTooFar();
     error QuoteDoesNotExist();
     error QuoteNotActive();
     error VerificationWindowExpired();
@@ -65,6 +70,7 @@ contract MonoracleMock is IMonoracle {
         uint32 expiryBlock_
     ) external returns (uint256) {
         if (expiryBlock_ <= uint32(block.number)) revert ExpiryMustBeFuture();
+        if (uint256(expiryBlock_) > block.number + MAX_VERIFICATION_SLOTS) revert ExpiryTooFar();
         uint256 id = nextQuoteId_++;
         quotes_[id] = QuoteData({
             provider: msg.sender,

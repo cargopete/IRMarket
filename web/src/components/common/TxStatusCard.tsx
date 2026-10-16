@@ -30,6 +30,7 @@ export function mapTransactionError(err: unknown): string {
     [/QuoteAmountTooSmall/, "Quote amount too small"],
     [/ZeroBaseAmount/, "Quote asset amount is 0"],
     [/ExpiryMustBeFuture/, "Expiry must be later than the current block"],
+    [/ExpiryTooFar/, "Expiry too far out — upstream Monoracle caps the window at ~1 hour (12,000 blocks)"],
     [/NotQuoteProvider/, "Only the quote provider can perform this action"],
     [/NotWithdrawable/, "Collateral can't be withdrawn yet"],
     // IRMarket wrapper errors

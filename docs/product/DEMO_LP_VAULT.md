@@ -30,14 +30,26 @@
 2. **Quote bot running** (otherwise the canonical price is frozen and PnL will not move):
    the bot runbook is in `DEMO.md`; it quotes the pairs **NVDA/HKD, GLM/HKD, SNDK/HKD,
    DEEPSEEK/HKD** every round. Check progress with `bot_run.log`.
-3. What you will see on-chain (Monad testnet, verified):
+3. What you will see on-chain (Monad testnet):
 
 | Contract | Address |
 |---|---|
-| `IRMarketVault` (the pool) | `0xE4B88dc23F7660957ce5bDFF100882384b2F52f7` |
-| Monoracle (canonical price) | `0xb6523DA6f177dB25d766a27575624B3e1fe0a00e` |
-| `priceBase` (NVDA — price only, never held by the pool) | `0xD092361E5Cb54Db4CE69a856086108B0862473b4` |
-| `settlementToken` (HKD — the one asset the pool holds) | `0x34675029742e7E5Fea3637F68c911414a47F9752` |
+| `IRMarketVault` (the pool) | `0x95a74C58bbF1F8F56c02d27Aecc0024D98e67dD3` |
+| Monoracle (canonical price; **upstream build, consumed — never deployed by IRMarket**) | `0x807321100748d75a618e508de214123CB77C9f4D` |
+| `priceBase` (NVDA — price only, never held by the pool) | `0xda9CF5A68cc2d8EFA5940db4094b6377D389DE17` |
+| `settlementToken` (HKD — the one asset the pool holds) | `0x36448Ef080ba5fa251e1a9bd61782786f9e24F04` |
+
+> 📍 **Stack status:** the table above is the **upstream (A) consumer stack** — testnet-live and wired to
+> the Vercel **Preview**; `irmarket.xyz` still serves the **fork (B) stack** (vault `0xE4B88d…`,
+> oracle `0xb652…`) until the Production cutover. Address provenance lives in
+> `deployment-vault.json` / `deployment-assets.json`; the survey record is
+> `docs/design/monoracle-version-survey.md`.
+>
+> 🧹 **Known UX note (Gap #3):** positions are **event-derived** from the configured
+> wrapper/oracle/vault addresses (no ledger, PRD D-09). After the cutover the UI reads the A
+> addresses, so **fork-era positions stop showing** (they still exist on-chain under the old
+> addresses) — that is address scoping, not data loss. A demo LP (`Equity 5,000 HKD`) is already
+> seeded on the A vault.
 
 ---
 

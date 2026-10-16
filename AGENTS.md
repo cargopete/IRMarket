@@ -33,6 +33,15 @@ This repo build on top of the Monoracle project (`github.com/dixia/monoracle`).
 > bot 双边抵押当对手方，**无资金池**）与 **LP pool MVP**（已实现：`contracts/IRMarketVault.sol`；
 > Monoracle **只做价格**，交易 = vault 持仓，池子做对手方）。不要在同一笔持仓里混用，也不要让 vault
 > 用它自己提交的报价结算。
+>
+> 🧭 **未来模型（已确认方向，详见 `docs/architecture.md` §7；本文仅约法）**：oracle 世界保持免许可
+> （任何人可对任何 pair 报价/仲裁）；IRMarket 只做**精选 pair** 的展示层（前端白名单，
+> `NEXT_PUBLIC_SELECTED_BASE_TOKENS`）；**每个精选 pair 独立 `IRMarketVault`**（MVP 仅 NVDA 一个），
+> LP 只能存该 pair 的 vault。硬规则：① IRMarket 侧脚本**永不部署 Monoracle**——oracle 是消费输入
+> （`ORACLE_ADDRESS` 必填，A-shape 指纹门禁，见 `script/deploy-market-stack.js`）；② oracle 绑定
+> immutable ⇒ 换 oracle = 重部署 wrapper/vault，绝不改 ABI；③ 测试代币是注册表
+> （`deployment-assets.json`）——按 symbol 复用 + mint 补充（`script/mint-demo-tokens.js`），**永不重部署**；
+> ④ 结算永远只分割**开仓时已托管**的资金，不存在事后追债（详见 architecture.md §5）。
 
 
 
@@ -58,6 +67,12 @@ Monad veto-arbitrage 长/短市场：
 - 提交 message 须基于 `git diff`/`rg` 核对的真实改动，勿凭文件名臆测。
 - 仓库文件禁写本机绝对路径（`C:\Users\iamh4\…`），统一用 `github.com/dixia/…` 引用。
 - 不自动 push，用户明确要求才 push。
+
+### Long-running commands (agent session hygiene)
+- 预计 **> ~60–90s** 的命令（playwright/e2e/视频套件、`next build`、`hardhat test`、合约部署、Vercel build）**禁止用单次前台 tool call 挂满大 timeout**：会话表现为"卡死"，协作者只能手动催。
+- 正确姿势：`Start-Process … -WindowStyle Hidden -RedirectStandardOutput/-RedirectStandardError <log>` 后台化跑，然后**短轮询**（每次 sleep 2–5s，一次 ≤ ~90s）读日志文件判断进度/完成，并在轮询之间向协作者播报中间状态；完成后再做收尾。
+- 跑完后台栈后清理残留进程（dev server / anvil / bot），按 `CommandLine` 匹配 kill，勿凭 exe 名误杀。
+- 短命令（< ~60s）仍可直接前台执行。
 
 ### Monad testnet
 - `eth_getLogs` 有约 100 区块范围上限，历史事件查询必须分块（5000 块回看 = 50 个 100 块窗口）。`usePositions` 曾因 `fromBlock:0→latest` 被 RPC 拒绝 + `.catch(()=>[])` 吞错而静默空白；初版 25000 块串行超时，最终方案 = 5000 块 + `Promise.all` 并行、15s 轮询。

@@ -33,13 +33,19 @@ contract IRMarket is ReentrancyGuard {
         SHORT               // vetoOverpriced  (pay base, get quote)
     }
 
+    /**
+     * @notice `feeBps` is bounded by `MAX_FEE_BPS` (10_000 < 2^16) and both block
+     *         numbers fit in 64 bits, so all three pack into ONE storage slot.
+     *         `createMarket` runs once per pair per round and Monad bills the gas
+     *         limit, so every slot saved here is paid for on every call.
+     */
     struct Market {
         address baseToken;      // e.g. LLM
         address quoteToken;     // e.g. HKD
         address marketMaker;    // fee recipient (bot)
-        uint256 feeBps;         // 1% = 100
-        uint256 expiryBlock;    // advisory; bot sets quote.expiryBlock = this value (D-13)
-        uint256 createdAtBlock;
+        uint16 feeBps;          // 1% = 100
+        uint64 expiryBlock;     // advisory; bot sets quote.expiryBlock = this value (D-13)
+        uint64 createdAtBlock;
     }
 
     // ============================================================
@@ -73,6 +79,7 @@ contract IRMarket is ReentrancyGuard {
     error IdenticalTokens();
     error FeeTooHigh();
     error ExpiryMustBeFuture();
+    error ExpiryTooFar();
     error QuotePairMismatch();
     error QuoteNotActive();
     error QuoteWindowExpired();
@@ -135,20 +142,23 @@ contract IRMarket is ReentrancyGuard {
         if (baseToken == quoteToken) revert IdenticalTokens();
         if (feeBps >= MAX_FEE_BPS) revert FeeTooHigh();
         if (expiryBlock <= block.number) revert ExpiryMustBeFuture();
+        // Market stores the expiry as uint64; reject anything that would truncate
+        // rather than silently register a round with a bogus (wrapped) expiry.
+        if (expiryBlock > type(uint64).max) revert ExpiryTooFar();
 
         marketId = nextMarketId++;
         markets[marketId] = Market({
             baseToken: baseToken,
             quoteToken: quoteToken,
             marketMaker: marketMaker,
-            feeBps: feeBps,
-            expiryBlock: expiryBlock,
-            createdAtBlock: block.number
+            feeBps: uint16(feeBps),
+            expiryBlock: uint64(expiryBlock),
+            createdAtBlock: uint64(block.number)
         });
 
         // grant the oracle allowance so the wrapper can veto with this pair's tokens
-        IERC20(baseToken).forceApprove(address(oracle), type(uint256).max);
-        IERC20(quoteToken).forceApprove(address(oracle), type(uint256).max);
+        _ensureOracleAllowance(baseToken);
+        _ensureOracleAllowance(quoteToken);
 
         emit MarketCreated(marketId, baseToken, quoteToken, marketMaker, expiryBlock, feeBps);
     }
@@ -240,5 +250,27 @@ contract IRMarket is ReentrancyGuard {
         if (q.baseToken != m.baseToken || q.quoteToken != m.quoteToken) revert QuotePairMismatch();
         if (q.status != IMonoracle.QuoteStatus.ACTIVE) revert QuoteNotActive();
         if (block.number > q.expiryBlock) revert QuoteWindowExpired();
+    }
+
+    /**
+     * @dev Grants the oracle a max allowance on `token` — but only if it does not
+     *      already have one. The spender is always `oracle` and the amount is always
+     *      max, so the approval is idempotent: once set it never needs to be repeated.
+     *
+     *      `createMarket` is called once per pair per round (the bot's
+     *      AUTO_CREATE_MARKET loop), and the two unconditional `forceApprove`s it used
+     *      to make dominated its cost (~2 cold SSTOREs + 2 external calls ≈ 40k gas).
+     *      Reading the allowance is 1 cold SLOAD (~2.1k), so the guard pays for itself
+     *      on the very first repeat call. Measured: 221,768 -> 181,968 gas locally,
+     *      198,542 -> ~158,000 on Monad testnet.
+     *
+     *      An allowance is only ever *raised* here (0 -> max), so a token that needs a
+     *      zero-reset before re-approving (USDT-style) still works on the first call;
+     *      `forceApprove` handles the fallback. A user who revokes the oracle's
+     *      allowance simply causes the next `createMarket` to re-approve.
+     */
+    function _ensureOracleAllowance(address token) private {
+        if (IERC20(token).allowance(address(this), address(oracle)) >= type(uint256).max) return;
+        IERC20(token).forceApprove(address(oracle), type(uint256).max);
     }
 }

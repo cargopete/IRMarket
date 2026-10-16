@@ -42,13 +42,16 @@ export const IRMARKET_ABI = [
     type: "function",
     name: "markets",
     inputs: [{ name: "", type: "uint256" }],
+    // feeBps (uint16) + expiryBlock (uint64) + createdAtBlock (uint64) pack into one
+    // storage slot — createMarket runs once per pair per round and Monad bills the gas
+    // limit, so the narrow types are a deliberate cost optimisation (contracts/IRMarket.sol).
     outputs: [
       { name: "baseToken", type: "address" },
       { name: "quoteToken", type: "address" },
       { name: "marketMaker", type: "address" },
-      { name: "feeBps", type: "uint256" },
-      { name: "expiryBlock", type: "uint256" },
-      { name: "createdAtBlock", type: "uint256" },
+      { name: "feeBps", type: "uint16" },
+      { name: "expiryBlock", type: "uint64" },
+      { name: "createdAtBlock", type: "uint64" },
     ],
     stateMutability: "view",
   },

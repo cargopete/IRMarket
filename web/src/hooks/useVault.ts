@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { usePublicClient } from "wagmi";
 import { VAULT_ABI } from "@/lib/abis/vault";
 import { MONORACLE_ABI } from "@/lib/abis/oracle";
+import { decodeLatestPrice } from "@/lib/decode";
 import { VAULT_ADDRESS, VAULT_ADDRESS_RAW, hasVault } from "@/lib/config";
 import { vaultSharePrice } from "@/lib/vault";
 import { useCurrentBlock } from "./useCurrentBlock";
@@ -127,7 +128,7 @@ export function useVaultPrice(): VaultPriceState {
         functionName: "getLatestPrice",
         args: [meta.priceBase, meta.settlementToken],
       });
-      return result as readonly [bigint, number, boolean];
+      return decodeLatestPrice(result as unknown[]);
     },
     enabled,
     refetchInterval: blockNumber !== undefined ? 15000 : 5000,
@@ -136,8 +137,8 @@ export function useVaultPrice(): VaultPriceState {
 
   const decoded = query.data;
   return {
-    price: decoded?.[0],
-    exists: decoded !== undefined && decoded[2] === true && decoded[0] > 0n,
+    price: decoded?.price,
+    exists: decoded !== undefined && decoded.exists && decoded.price > 0n,
     isLoading: meta.isLoading || query.isLoading,
     refetch: query.refetch,
   };
