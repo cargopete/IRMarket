@@ -29,7 +29,20 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 from web3 import Web3
 
-load_dotenv()
+# Load bot/.env by EXPLICIT PATH, not via a bare load_dotenv().
+#
+# Bare load_dotenv() delegates to find_dotenv(), which normally walks up from this
+# file's directory and finds bot/.env. But find_dotenv() abandons that strategy and
+# falls back to os.getcwd() whenever _is_interactive(), _is_debugger()
+# (sys.gettrace() is not None — i.e. ANY debugger), or sys.frozen is true. With a CWD
+# that is not bot/ there is no .env to find, every var silently stays unset, and the
+# bot dies with "RPC unreachable: https://testnet-rpc.monad.xyz" (the default) — which
+# is exactly what happens when you run this file from VS Code / PyCharm's debugger.
+#
+# An explicit path is immune to CWD, debugger and REPL. override=False is kept, so
+# variables already in the environment still win (e.g. $env:MARKET_ID=n overrides
+# bot/.env).
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 log = logging.getLogger("irmarket-bot")
 
