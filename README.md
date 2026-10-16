@@ -1,7 +1,7 @@
 # IRMarket
 
 An option market on any priced asset — A-share stocks, Labubu, whatever has a price.
-Built on the **Monad** blockchain on top of the **Monoracle** veto-arbitrage primitive:
+Built on top of the **Monoracle** veto-arbitrage primitive:
 settlement prices are enforced by bilateral collateral and permissionless on-chain arbitrage.
 No off-chain data feeds, no validators.
 
