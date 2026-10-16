@@ -1,6 +1,6 @@
 # LP pool premium pricing — technical spec (V0.1 draft, 2026-10-16)
 
-Status: **draft for review**. Companion to `docs/design/lp-pool-tech-spec.md` (§4 payoff,
+Status: **design finalized 2026-10-16 — implementation DEFERRED** (first task of the V0.1 board, `dixia/IRMarket#11`; deliberately not implemented in P5/PR #10). Final decision: the **contract itself computes the premium** — traders never supply it. Companion to `docs/design/lp-pool-tech-spec.md` (§4 payoff,
 §8 price adapter). This document only decides *how the LP pool charges a premium*; it does
 not change the vault payoff or the Monoracle price source.
 
@@ -18,8 +18,10 @@ premium a **real, market-priced option premium** — priced from spot, strike (=
 spot for ATM opens), tenor (per vault tenor), and volatility — while keeping:
 
 - the pool as the sole counterparty and the settlement token as the only asset;
-- the counterparty cap envelope `payout ∈ [0, 2N]` on the **at-risk band N** (unchanged
-  from tech-spec §4.2), with N decoupled from the premium paid (see §5);
+- the pool-side liability cap on the at-risk band: **`payout ∈ [0, nAtRisk]`** in the
+  V1.0-premium model (§9) — the trader's max loss is the premium, so the legacy
+  `payout ∈ [0, 2N]` shape (which included the trader's own principal) is replaced;
+  the deployed contract keeps the legacy shape until this ships (§4 legacy note);
 - no admin keys on the pricing path, consistent with the veto-arbitrage / ownerless
   convention (`docs/architecture.md` §6–§7);
 - Monoracle stays **price only**: the premium is money, not a quote, and must never be
@@ -28,6 +30,14 @@ spot for ATM opens), tenor (per vault tenor), and volatility — while keeping:
 Scope for V1: short-expiry (block/minutes-scale tenor) ATM-ish opens on a small set of
 whitelisted pairs, one vault per pair (`docs/architecture.md` §7). This document is
 about the pricing surface, not the vol-forecasting alpha (backtest lives in §7–§8).
+
+**Decided mechanism (2026-10-16):** the premium is **computed by the vault**,
+deterministically from deploy-time parameters — traders supply only `side`, `nAtRisk`
+and `tenorBlocks`; there is **no premium input and no signature path**. This removes
+the undercut attack (a trader can never underpay: the price is not their input) and
+collapses the reviewed trust-model question (no pricing provider, no signatures, no
+bounds game). σ becomes a **deploy-time constant** (`sigmaDeploy`), the same
+frozen-at-deploy tradeoff every other vault parameter already makes.
 
 ## 2. What the on-chain infra supports TODAY
 
@@ -50,9 +60,10 @@ read time beyond the ring; long-history accumulators (e.g. EWMA of squared log-r
 can be held in ~3 packed slots. ×1000. Effect: σ is *observable, not forecastable* —
 short-horizon NAV-vol numbers are extreme (see (v) realistic magnitudes) and noisy.
 
-(iv) **Cap envelope 2N** — unchanged: `maxPayout = 2 × notional` on the at-risk band
-(N decoupled from the premium in §5). The premium computation must never widen the
-envelope; it only re-prices what the trader pays.
+(iv) **Cap envelope** — legacy contract: `maxPayout = 2 × notional` (2N includes the
+trader's principal). V1.0-premium (§9): `pendingPayout += nAtRisk` and pool payout
+`∈ [0, nAtRisk]` — the pool underwrites the band from LP capital while the premium is
+pure income. The premium computation must never widen the envelope.
 
 (v) **Gas costs (measured)** —`contracts/probe/BsmPricingProbe.sol` was deployed on the
 in-process hardhat network (throwaway tooling, never wired into a product contract)
@@ -103,6 +114,32 @@ the probe documents).
 All options assume the same inputs (S from Monoracle, T from the position) and differ in
 **who supplies σ and where the seller premium is computed**.
 
+### Decision (2026-10-16) — V1.0: contract-decided deterministic premium
+
+Traders **never supply the premium** (undercut attack: with caller-supplied premiums
+inside bounds, a rational trader always pays the floor and captures the information
+rent — LP income collapses to the floor). Dynamic LP pricing would need governance
+(admin surface — rejected). A signed external provider (option B, below) works but
+adds signature infrastructure for a market with exactly one seller per pair.
+
+**V1.0 therefore prices on-chain, deterministically:**
+
+```
+premium = 0.4 · sigmaDeploy · √T · nAtRisk        (ATM closed form, S = K at open)
+clamp:   premium ≤ 0.10 · nAtRisk                 (config guard)
+```
+
+- `sigmaDeploy` is an immutable deploy-time constant (WAD annualized IV **with margin
+  baked in**; demo ≈ 400% ⇒ 30-min ATM premium ≈ 1.21% of nAtRisk ≥ the flat 1%).
+- Only `sqrt` + `mulDiv` are needed (no `ln`/`exp`/`erf`) — ~2–3k gas, vs the +10–24%
+  full-BSM costs in §2(v) (option A remains available as the exact-pricing upgrade; the
+  probe contract stays the audit tool).
+- The LP's pricing lever is **which vault session to deposit into** (σ_deploy at deploy),
+  consistent with the per-pair/per-session model (`docs/architecture.md` §7).
+- Options A/B/C below are retained as documented alternatives: **B (signed provider) is
+  the V1.1 upgrade path** if premiums must become dynamic without a redeploy; the
+  trader-supplied variant is rejected outright (undercut).
+
 ### Option A — fully on-chain BSM
 
 The vault computes `premium = BSM(S0, K, T, σ)` itself; σ comes from somewhere on-chain
@@ -120,7 +157,7 @@ time (fixed loops), no storage writes, no MEV surface on the premium itself.
   is set per-vault at deploy like `feeBps`). An A–S 26.2.17 Φ (±7.5e-8) or provider
   disagreement on vol is not the weak point — the σ feed is.
 
-### Option B — off-chain premium submitted by the pricing provider (recommended)
+### Option B — off-chain premium submitted by the pricing provider (V1.1 — superseded for V1.0 by the §3 decision; retained for vol-regime responsiveness without redeploy)
 
 Match the existing quote-provider pattern (the bot already submits every quote a round):
 the **pricing provider submits the premium alongside the price** as an explicit
@@ -210,45 +247,37 @@ Arguments from the measured numbers + the ownerless convention:
    measurement tool for the bounds design (§7) and for validating any future on-chain
    pricing upgrade (option A remains the "if we ever want full on-chain pricing" path).
 
-## 4. What must change in the vault contract to accept a priced premium (SPEC ONLY, NO CODE)
+## 4. What must change in the vault contract (SPEC ONLY, NO CODE — final design)
 
 Today `openPosition(side, depositAmount, tenorBlocks)` treats `depositAmount` as both
 the premium paid and the source of the at-risk band (`fee = depositAmount × feeBps`,
-`notional = depositAmount − fee`, `maxPayout = 2 × notional`). To decouple:
+`notional = depositAmount − fee`, `maxPayout = 2 × notional`). The V1.0-premium design
+replaces this with a **true option**: the trader pays a protocol-computed premium and
+risks only that premium; the pool underwrites the band from LP capital.
 
-- **Signature (pinned)**: `openPosition(side, premium, nAtRisk, tenorBlocks, deadline,
-  sig)` with immutable `pricingProvider_` in the constructor (see §3-B trust model).
-  Legacy note: the earlier draft read `openPosition(side, premium, nAtRisk,
-  tenorBlocks)` with no authorization path — superseded.
-  Historical alternative per pool design: `nAtRisk` derived on-chain from the premium by an
-  on-chain "insurance-style" conversion rule; that keeps the trader surface at
-  `openPosition(side, premium, tenorBlocks)` but couples premium → N through
-  pool-chosen policy. V1 default: keep the **explicit N** — it preserves the 2N cap
-  envelope honesty and makes the LP exposure per open legible; premium and N are then
-  separately bounded (premium ≥ some function of (S, T, σ) per §3-B bounds; N ≥ 0,
-  both in settlement token).
-  tenorBlocks)` — the trader declares both what they pay and what at-risk band they buy.
-  Alternative per pool design: `nAtRisk` derived on-chain from the premium by an
-  on-chain "insurance-style" conversion rule; that keeps the trader surface at
-  `openPosition(side, premium, tenorBlocks)` but couples premium → N through
-  pool-chosen policy. V1 default: keep the **explicit N** — it preserves the 2N cap
-  envelope honesty and makes the LP exposure per open legible; premium and N are then
-  separately bounded (premium ≥ some function of (S, T, σ) per §3-B bounds; N ≥ 0,
-  both in settlement token).
-- **Accounting split**: `premium` flows **to LP equity** (`balance += premium`,
-  share-nothing else — it dilutes nobody at open; it's pool income, not collateral) and
-  never enters `notional`. The at-risk band `N` is escrowed as today (the position is
-  collateralized by N against the pool: `pendingPayout += maxPayout` where
-  `maxPayout = 2 × N` on the at-risk band — the 2N cap stays untouched because the
-  trader's worst loss is N and best gain is +N, regardless of what the premium cost).
-- **Fee**: the current `feeBps` cut becomes optional — with a real premium charged the
-  spread-as-pay-for-risk role is obsolete; keep `feeBps` as a protocol take (default
-  0 for the demo) rather than a premium component. The vault invariant
-  `pendingPayout ≤ balance` is unchanged (premium adds to balance, at-risk N adds to
-  pendingPayout through the same 2N shape).
-- **Who calls what**: pricing provider (option B) submits premium bounds evidence via
-  calldata only; no new storage, no new events beyond the existing
-  `PositionOpened` (add `premium`/`nAtRisk` fields when changing the struct — pure spec).
+- **Signature (final)**: `openPosition(Side side, uint256 nAtRisk, uint64 tenorBlocks)` —
+  **no premium argument, no signature argument, no provider**. The premium is derived
+  on-chain: `premium = 0.4 · sigmaDeploy · sqrt(tenorBlocks × 0.3 / 31,536,000) · nAtRisk`,
+  clamped `premium ≤ 0.10 · nAtRisk` (revert `PremiumAboveCeil` — reachable only if
+  `sigmaDeploy` is misconfigured at deploy). Constructor gains `uint256 sigmaDeploy_`
+  (WAD annualized IV with margin baked in; demo ≈ 400%).
+- **Accounting (true option)**: trader pays `premium` → `balance += premium` (**LP equity
+  income** — the seller's earnings, never a refundable principal); `pendingPayout += nAtRisk`
+  (the pool underwrites the band from **LP capital** — the pool is literally the seller's
+  margin account). Invariant `pendingPayout ≤ balance` unchanged, now enforced against
+  LP deposits rather than the trader's own principal.
+- **Payoff (final)**: `_payout()` becomes intrinsic-only — LONG:
+  `min(max((S − S0) · nAtRisk / S0, 0), nAtRisk)`; SHORT mirrored. The trader's max loss
+  = the premium (sunk at open); the pool's max liability = `nAtRisk`. The legacy 2N shape
+  (which included the trader's principal) is retired with the old signature.
+- **Fee**: `feeBps` loses its pay-for-risk role (the premium IS the price); keep it as an
+  optional protocol take (default 0 for the demo) or retire it — V1 pricing must clear
+  `premium + any spread` combined vs realized moves (§8).
+- **Errors / events**: `PremiumAboveCeil`, `ZeroAtRisk`, legacy `Insolvent` unchanged;
+  `PositionOpened` gains `premium` / `nAtRisk` fields (struct change, pure spec);
+  `settlePosition` untouched.
+- **Legacy note**: the deployed A-stack vault keeps the deposit-as-premium (2N) shape
+  until this ships; switching = redeploy + LP re-seed (V0.1 board task, issue #11).
 - **Out of scope here**: withdrawal-queue accounting of premium income (tech-spec §6.4
   already reserves equity for worst-case payout; premium income is pool cash, same
   bucket), and any change to settlement (`settlePosition` is untouched).
@@ -259,11 +288,18 @@ the premium paid and the source of the at-risk band (`fee = depositAmount × fee
   cash-cost-aware, and cannot regress (any bugs here can only lose margin, not mint
   LP liabilities). Switching to priced premiums is a product upgrade, not a demo
   dependency — the two coexist (`feeBps`-spread mode remains the default deploy).
-- **Wrong premium ⇒ silent LP bleed**: a premium below fair value transfers wealth to
-  traders *within* the 2N cap; there is no clawback mechanism (the "no debt, escrowed
-  at open" property of `docs/architecture.md` §5). Bounds (option B) are the only
-  on-chain guard; their calibration is a backtest question (§7–§8), not a
-  formal guarantee.
+- **Undercut attack: resolved by design.** The premium is not a caller input — no
+  trader (or provider) can underpay; the only knob is `sigmaDeploy` at deploy.
+- **Wrong premium ⇒ silent LP bleed (σ_deploy mispriced)**: a deploy-time σ below
+  realized vol transfers wealth to traders *within* the liability cap; there is no
+  clawback mechanism (the "no debt, escrowed at open" property of `docs/architecture.md`
+  §5). Calibration is a backtest question (§7–§8), not a formal guarantee.
+- **LP capital now underwrites sold options**: with premiums decoupled, the pool's
+  balance must cover Σ nAtRisk (invariant) — the 15,000 HKD demo seed underwrites
+  ~15,000 HKD of aggregate at-risk bands. Open reverts `Insolvent` beyond that; UI must
+  surface remaining capacity (follow-up).
+- **Frozen premium schedule accepted**: σ_deploy is immutable; vol-regime shifts are
+  handled by redeploy/new LP session (or the V1.1 signed-provider path if built).
 - **σ ephemerality**: realized vol is only known after expiry; premium fairness is
   judged against *baked* σ at open, while the payoff depends on realized move — that is
   normal for options and not a defect, but any claim that a specific premium is "fair"
@@ -281,9 +317,9 @@ the premium paid and the source of the at-risk band (`fee = depositAmount × fee
 
 - Tenor band: 1 block (0.3 s) … 100 blocks (30-min round); `T = blocks × 0.3 / 31.5M yr` —
   probe-supported down to a block end-to-end (tuple 6 above, 26.4k gas).
-- σ band for bounds design: observed NVDA-like short-horizon NAV moves give 100–1325%
-  annualized at these tenors; production bounds should cover at least [10%, 5000%]
-  (probe range).
+- `sigmaDeploy` guidance: realized per-round ATM σ observed ≈ 182% annualized (§8);
+  deploy with **margin on top — demo ≈ 400%** (⇒ 30-min ATM premium ≈ 1.21% of nAtRisk,
+  ≥ the flat 1% economics). Probe-supported band [10%, 5000%].
 - Moneyness: ATM±10% bucket for V1 UX (the pool strikes at the entry price → S = K
   exactly, so d1/d2 collapse to the pure-vol ATM formula; OTM/ITM stripes only enter
   via the bounds design, not via open-time strikes).
@@ -359,6 +395,30 @@ Interpretation for §3-C (bounds design): an on-chain envelope should sit at
 for ATM micro-tenors — matching the flat 1% behavior at current realized σ (ceilMesh
 at ~2.5× keeps TEEs sane), and the V1 pricing curve should track **implied** vol
 quotes, not raw realized vol.
+
+## 9. Implementation plan (V1.0-premium) — DEFERRED, planned first task of the V0.1 board (#11)
+
+> Explicitly **not implemented** in P5/PR #10. The contract below is the build sheet for
+the next session; do not start it inside the migration PR.
+
+1. **Contract** (`IRMarketVault.sol`): constructor `+ uint256 sigmaDeploy_`;
+   `openPosition(Side, uint256 nAtRisk, uint64 tenorBlocks)` per §4; premium derivation
+   (`0.4·sigmaDeploy·√T·nAtRisk`, ≤10% clamp); accounting per §4 (premium → balance;
+   `pendingPayout += nAtRisk`); `_payout()` intrinsic-only; errors `PremiumAboveCeil` /
+   `ZeroAtRisk`. `IRMarket.sol` untouched.
+2. **Tests**: rework the vault suite — premium-funded opens (floor/ceil/typical),
+   intrinsic payouts both directions, trader max-loss = premium, pool max-loss = nAtRisk,
+   `Insolvent` under LP-capital accounting, σ_deploy edge cases; keep the fuzz/invariants
+   green under the new shape.
+3. **Frontend**: `useVault` / vault page / premium quote preview (client-side copy of the
+   pinned formula), PnL display = intrinsic − premium, remaining-capacity read.
+4. **E2E**: update `13-vault` + video spec steps (open = choose nAtRisk/tenor; premium
+   shown; settle both directions).
+5. **Deploy/re-seed**: new vault (A oracle, σ_deploy = 400%, feeBps = 0) → re-seed 15,000
+   HKD demo LP → update `deployment-vault.json` + Vercel **Preview** env (never production
+   in this step) → verify `/vault`.
+6. **Acceptance**: hardhat suite green; e2e 20/20; `/vault` shows premium-funded positions;
+   both-direction settle demonstrated once (mirroring the 2026-10-16 hedge demo).
 
 ## References
 
