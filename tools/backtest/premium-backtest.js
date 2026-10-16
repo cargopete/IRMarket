@@ -46,6 +46,24 @@
  *          BOTH books and reported separately, so the comparison stays apples-to-apples).
  *   5. Sensitivity: σ × 0.5, σ × 1.5 on the same window σ and same payout book.
  *
+ * Two-side book (2026-10-16 extension, dixia/IRMarket#11 review): the vault
+ * sells BOTH sides of the same 100 HKD notional every round — the version this
+ * file replaced replayed ONLY the CALL (LONG-buyer) book max(S1−S0,0), but the
+ * capped-linear payoff the pool sells is put-like for SHORT positions. Per
+ * round we now ALSO price/sell the PUT side against the SAME units (100/S_i):
+ *   payoutPut = units · max(K − S1, 0), cap applied PER SIDE at min(·, 198)
+ *   (= 2 × 99); put BSM premium via r=0 parity put = call − S + K, floored at
+ *   0 (degenerate σ/T already returns the 0/floor case at ATM); MVP-flat
+ *   charges the SAME 1 HKD (1% of 100) on the put side — SHORT pays the same
+ *   fee spread. σ logic and the σ×0.5/σ×1.5 sensitivity apply to BOTH books
+ *   identically (call and put are both ATM on K=S_i, so an annualized lift is
+ *   symmetric). The CSV keeps every existing call column and its order and
+ *   APPENDS: putPremiumBSM, putPremiumFlat, putPayout, putBSMPnL, putFlatPNL,
+ *   bsmStraddlePremium, flatStraddlePremium, straddlePayout, straddleBSMPnL,
+ *   straddleFlatPNL (straddle = call + put). The summary keeps the call-book
+ *   block byte-for-byte comparable to the reviewed numbers and appends a
+ *   "STRADDLE BOOK" section (§4/§5/Usage otherwise unchanged).
+ *
  * Usage:  $env:RPC_URL = "<rpc>"; node tools/backtest/premium-backtest.js
  * Output: docs/design/lp-pool-premium-backtest-2026-10-16.csv + printed summary.
  */
@@ -83,9 +101,17 @@ const PAYOUT_CAP = 2 * N_TRADE; // 198 HKD pool cap (2N)
 const WINDOW_RETURNS = 24; // sliding window for σ
 
 const deps = JSON.parse(fs.readFileSync(path.join(ROOT, "deployment.json"), "utf8"));
-const ORACLE = deps.oracle;
-const NVDA_TOKEN = deps.baseToken; // NVDA per deployment registry
-const provider = new ethers.JsonRpcProvider(RPC, Number(deps.chainId || 10143), { staticNetwork: true });
+// Fresh-clone reproducibility: env overrides win over the (gitignored) deployment.json.
+//   $env:ORACLE_ADDRESS / $env:BASE_TOKEN / $env:QUOTE_TOKEN / $env:START_BLOCK
+const ORACLE = process.env.ORACLE_ADDRESS || deps.oracle;
+const NVDA_TOKEN = process.env.BASE_TOKEN || deps.baseToken; // NVDA per deployment registry
+const QUOTE_TOKEN_ENV = process.env.QUOTE_TOKEN || deps.quoteToken;
+if (process.env.ORACLE_ADDRESS) {
+  console.log("config: ORACLE/BASE/QUOTE from env overrides (fresh-clone mode)");
+} else {
+  console.log("config: ORACLE/BASE/QUOTE from gitignored deployment.json — set $env:ORACLE_ADDRESS, $env:BASE_TOKEN, $env:QUOTE_TOKEN to run on a fresh clone");
+}
+const provider = new ethers.JsonRpcProvider(RPC, Number(process.env.CHAIN_ID || deps.chainId || 10143), { staticNetwork: true });
 const T_SETTLED = "0xb6534e1b0a46120b0ef870d3b6214387a8dec3c83d1d1dcc32ea4f11ac28ba6c";
 const T_SUBMITTED = ethers.id("QuoteSubmitted(uint256,address,address,address,uint256,uint256,uint256,uint32,uint32)");
 const iface = new ethers.Interface([
@@ -113,6 +139,12 @@ function bsmCall(S, K, sigma, T) {
   return S * Phi(d1) - K * Phi(d2);
 }
 
+// BSM r=0 European put via parity: put = call − S + K, floored at 0
+// (degenerate σ/T: bsmCall returns intrinsic max(S−K,0) ⇒ put = max(0, 0)/intrinsic correctly)
+function bsmPut(S, K, sigma, T) {
+  return Math.max(bsmCall(S, K, sigma, T) - S + K, 0);
+}
+
 // ---- 1. chunked log retrieval (JSON-RPC batched) ---------------------------
 // QuickNode wants hex-QUANTITY block refs; raw provider.send() does NOT hexlify JSON numbers.
 // Batched POSTs: BATCH getLogs per HTTP request keeps total wall clock under the ~8 min cap.
@@ -130,8 +162,12 @@ async function postBatch(body) {
 async function main() {
   const t0 = Date.now();
   const head = Number(await provider.getBlockNumber());
-  // start block: oracle deploy tx receipt; fallback head−1,000,000 then the documented floor
+  // start block: $env:START_BLOCK override > oracle deploy tx receipt; fallback head−1,000,000
   let start;
+  if (process.env.START_BLOCK) {
+    start = Number(process.env.START_BLOCK);
+    console.log(`start=${start} from $env:START_BLOCK`);
+  } else
   try {
     const rc = await provider.getTransactionReceipt(deps.txHashes.oracle);
     if (!rc) throw new Error("receipt null");
@@ -291,6 +327,14 @@ async function main() {
     const hkd = (perUnit / S0) * NOTIONAL; // = 100 × premiumPct (same notional as flat)
     return isFinite(hkd) ? hkd : null;
   };
+  // PUT side, same units/notional transform. ATM K=S0 ⇒ parity put = call − S0 + S0 = call,
+  // but priced through bsmPut explicitly so the put-floor/parity semantics stay visible.
+  const pricePut = (S0, sigmaProp, T) => {
+    if (!sigmaProp || !isFinite(sigmaProp) || sigmaProp <= 0 || !(T > 0)) return null;
+    const perUnit = bsmPut(S0, S0, sigmaProp / Math.sqrt(T), T); // ATM: K=S0
+    const hkd = (perUnit / S0) * NOTIONAL;
+    return isFinite(hkd) ? hkd : null;
+  };
   const rows = [];
   for (let i = 1; i < marks.length; i++) {
     const dt = marks[i].block - marks[i - 1].block;
@@ -299,12 +343,16 @@ async function main() {
     const units = NOTIONAL / S0; // 100 HKD notional
     const payoutUncapped = units * Math.max(S1 - S0, 0);
     const payout = Math.min(payoutUncapped, PAYOUT_CAP); // pool cap = 2N = 198 HKD
+    const payoutPutUncapped = units * Math.max(S0 - S1, 0); // same units, SHORT-buyer side
+    const payoutPut = Math.min(payoutPutUncapped, PAYOUT_CAP); // cap applied PER SIDE (198 each)
     const sig = sigmaRound(marks[i - 1].block, dt, true);
     const sigAllHist = sigmaRound(marks[i - 1].block, dt, false) ?? sig;
     const T = (dt * SECS_PER_BLOCK) / SECS_PER_YEAR;
     const flatPNL = FLAT_PREMIUM - payout;
+    const flatPutPNL = FLAT_PREMIUM - payoutPut; // MVP-flat: same 1 HKD on the put side
     const wPrem = priceOption(S0, sig?.sigmaT ?? null, T);
     const aPrem = priceOption(S0, sigAllHist?.sigmaT ?? null, T);
+    const wPutPrem = pricePut(S0, sig?.sigmaT ?? null, T);
     rows.push({
       i: rows.length + 1, blockStart: marks[i - 1].block, blockEnd: marks[i].block,
       S0, S1, dtBlocks: dt, T,
@@ -313,6 +361,16 @@ async function main() {
       payoutHKD: payout, payoutUncappedHKD: payoutUncapped,
       bsmPNL_w: wPrem === null ? -payout : wPrem - payout, // unpriced round: sold at 0 → full payout loss
       bsmPNL_a: aPrem === null ? -payout : aPrem - payout, flatPNL,
+      // put side + straddle (call + put of the SAME notional)
+      putPremiumBSM_w: wPutPrem, putFlatPremiumHKD: FLAT_PREMIUM,
+      putPayoutHKD: payoutPut, putPayoutUncappedHKD: payoutPutUncapped,
+      putBSMPNL_w: wPutPrem === null ? -payoutPut : wPutPrem - payoutPut,
+      putFlatPNL: flatPutPNL,
+      straddlePremiumBSM_w: (wPrem ?? 0) + (wPutPrem ?? 0),
+      straddleFlatPremiumHKD: 2 * FLAT_PREMIUM,
+      straddlePayoutHKD: payout + payoutPut, // one side is always 0 at ATM ⇒ = capped units·|S1−S0|
+      straddleBSMPNL_w: (wPrem === null ? -payout : wPrem - payout) + (wPutPrem === null ? -payoutPut : wPutPrem - payoutPut),
+      straddleFlatPNL: flatPNL + flatPutPNL,
       nSampleWin: sig?.nSample ?? 0,
       sigmaAnnWin: sig ? sig.std / Math.sqrt((sig.meanGapBlocks * SECS_PER_BLOCK) / SECS_PER_YEAR) : NaN,
     });
@@ -320,10 +378,10 @@ async function main() {
   const noSigma = rows.filter((r) => r.bsmPremiumHKD_w === null).length;
 
   // ---- CSV (headline = sliding-window σ) ------------------------------------
-  const csvLines = ["i,blockStart,blockEnd,S0,S1,dtBlocks,sigmaUsed,bsmPremiumHKD,flatPremiumHKD,payoutHKD(lpCapped),bsmPNL,flatPNL"];
+  const csvLines = ["i,blockStart,blockEnd,S0,S1,dtBlocks,sigmaUsed,bsmPremiumHKD,flatPremiumHKD,payoutHKD(lpCapped),bsmPNL,flatPNL,putPremiumBSM,putPremiumFlat,putPayout,putBSMPnL,putFlatPNL,bsmStraddlePremium,flatStraddlePremium,straddlePayout,straddleBSMPnL,straddleFlatPNL"];
   for (const r of rows) {
     const n6 = (x, d = 6) => (x === null || x === undefined || (typeof x === "number" && !isFinite(x)) ? "" : x.toFixed(d));
-    csvLines.push([r.i, r.blockStart, r.blockEnd, r.S0.toFixed(6), r.S1.toFixed(6), r.dtBlocks, r.sigmaWindow ? r.sigmaWindow.toPrecision(6) : "", r.bsmPremiumHKD_w?.toFixed(6) ?? "", r.flatPremiumHKD.toFixed(4), r.payoutHKD.toFixed(6), r.bsmPNL_w.toFixed(6), r.flatPNL.toFixed(6)].join(","));
+    csvLines.push([r.i, r.blockStart, r.blockEnd, r.S0.toFixed(6), r.S1.toFixed(6), r.dtBlocks, r.sigmaWindow ? r.sigmaWindow.toPrecision(6) : "", r.bsmPremiumHKD_w?.toFixed(6) ?? "", r.flatPremiumHKD.toFixed(4), r.payoutHKD.toFixed(6), r.bsmPNL_w.toFixed(6), r.flatPNL.toFixed(6), r.putPremiumBSM_w?.toFixed(6) ?? "", r.putFlatPremiumHKD.toFixed(4), r.putPayoutHKD.toFixed(6), r.putBSMPNL_w.toFixed(6), r.putFlatPNL.toFixed(6), r.straddlePremiumBSM_w.toFixed(6), r.straddleFlatPremiumHKD.toFixed(4), r.straddlePayoutHKD.toFixed(6), r.straddleBSMPNL_w.toFixed(6), r.straddleFlatPNL.toFixed(6)].join(","));
   }
   fs.mkdirSync(path.dirname(OUT_CSV), { recursive: true });
   fs.writeFileSync(OUT_CSV, csvLines.join("\n") + "\n");
@@ -369,6 +427,31 @@ async function main() {
   }
   const s05 = sens(0.5), s10 = { mult: 1, prem: wPrem, pnl: wPNL, bad: 0 }, s15 = sens(1.5);
 
+  // STRADDLE BOOK (call + put of the same notional) — window24 σ headline, wPriced subset
+  // (BSM and flat compared over the SAME priced rounds, apples-to-apples with [1]).
+  const stPremB = wPriced.reduce((a, r) => a + r.straddlePremiumBSM_w, 0);
+  const stPayout = wPriced.reduce((a, r) => a + r.straddlePayoutHKD, 0);
+  const stPNLB = wPriced.reduce((a, r) => a + r.straddleBSMPNL_w, 0);
+  const stPremF = wPriced.length * 2 * FLAT_PREMIUM;
+  const stPNLF = wPriced.reduce((a, r) => a + r.straddleFlatPNL, 0);
+  const worstStB = worst(wPriced.map((r) => r.straddleBSMPNL_w));
+  const worstStF = worst(wPriced.map((r) => r.straddleFlatPNL));
+  // σ×{0.5,1.5} on BOTH sides (ATM: BSM put = call by parity, so the straddle is 2×Call)
+  function sensStraddle(mult) {
+    let prem = 0, pnl = 0, bad = 0;
+    for (const r of wPriced) {
+      const call = priceOption(r.S0, r.sigmaWindow * mult, r.T);
+      const put = pricePut(r.S0, r.sigmaWindow * mult, r.T);
+      if (call === null || put === null) { bad++; continue; }
+      prem += call + put;
+      pnl += call + put - r.straddlePayoutHKD;
+    }
+    return { mult, prem, pnl, bad };
+  }
+  const st05 = sensStraddle(0.5), st10 = sensStraddle(1), st15 = sensStraddle(1.5);
+  // reconciliation: per-row straddlePayout = capped call payout + capped put payout (one side ≡ 0 at ATM)
+  const reconSt = wPriced.reduce((a, r) => a + r.straddlePayoutHKD - r.payoutHKD - r.putPayoutHKD, 0);
+
   // reconciliation check
   const reconBSM = rows.reduce((a, r) => a + r.bsmPNL_w, 0);
   const reconFlat = rows.reduce((a, r) => a + r.flatPNL, 0);
@@ -400,6 +483,19 @@ async function main() {
   console.log(`
 [3] BOOK: BSM-priced ALL-HISTORY σ (variant):`);
   console.log(`  premium=${aPrem.toFixed(2)} HKD  net PnL=${aPNL.toFixed(2)} HKD  worst=${worstA.toFixed(2)} HKD (${aPriced.length} rounds priced)`);
+
+  console.log(`
+[3b] STRADDLE BOOK (pool sells CALL **and** PUT of the SAME ${NOTIONAL} HKD notional/round, same ${wPriced.length} priced rounds):`);
+  console.log(`  total straddle BSM premium = ${stPremB.toFixed(2)} HKD (call ${wPrem.toFixed(2)} + put ${(stPremB - wPrem).toFixed(2)}) vs total straddle flat premium = ${stPremF.toFixed(2)} HKD (${FLAT_PREMIUM.toFixed(2)}/side × 2)`);
+  console.log(`  total straddle capped payout (same rounds) = ${stPayout.toFixed(2)} HKD — charged against BOTH books`);
+  console.log(`  straddle BSM net PnL = ${stPNLB.toFixed(2)} HKD   |   straddle flat net PnL = ${stPNLF.toFixed(2)} HKD`);
+  console.log(`  worst single-round straddle loss: BSM ${worstStB.toFixed(2)} / flat ${worstStF.toFixed(2)} HKD`);
+  console.log(`  σ-sensitivity (window24 ×m, both sides):`);
+  for (const s of [st05, st10, st15]) {
+    console.log(`    σ×${s.mult}: straddle premium=${s.prem.toFixed(2)} HKD  net PnL=${s.pnl.toFixed(2)} HKD${s.bad ? `  (${s.bad} row(s) unpriceable → skipped)` : ""}`);
+  }
+  console.log(`  reconciliation: Σ(straddlePayout − callPayout − putPayout) over priced rounds = ${reconSt.toFixed(6)} (0 expected: at ATM one side is always 0, cap is per side); printed straddle totals = Σ per-row straddleBSMPnL(${stPNLB.toFixed(2)}) / straddleFlatPnL(${stPNLF.toFixed(2)}) over the same ${wPriced.length} rows.`);
+  console.log(`  honest note: LONG and SHORT sides hedge each other by construction — at ATM exactly one side finishes ITM, so straddlePayout = units·|S1−S0| (capped). The straddle book's PnL is therefore ± a small drift/vol term around −(realized |move| − charged premium), NOT the deep-loss tail the call-only book showed; with flat pricing it converges to ≈ 2×1 HKD fees plus strike-adjacent noise (payout tiny when |S1−S0| is small relative to S0). Treat per-round magnitudes as indicative only.`);
 
   console.log(`
 reconciliation: Σ per-round bsmPNL(all rows) = ${reconBSM.toFixed(2)} = Σ priced(${reconBSMSame.toFixed(2)}) + Σ unpriced(${(reconBSM - reconBSMSame).toFixed(2)}); Σ per-round flatPNL(all rows) = ${reconFlat.toFixed(2)}; printed totals reconcile when: priced-only ${reconBSMSame.toFixed(2)} == [1] BSM net PnL ${wPNL.toFixed(2)} and all-rounds flat ${reconFlat.toFixed(2)} == (flat all ${flatAllTotal.toFixed(2)} − payout all ${payoutTotal.toFixed(2)}).`);

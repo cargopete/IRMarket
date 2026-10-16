@@ -124,16 +124,48 @@ time (fixed loops), no storage writes, no MEV surface on the premium itself.
 
 Match the existing quote-provider pattern (the bot already submits every quote a round):
 the **pricing provider submits the premium alongside the price** as an explicit
-`premium` argument, and the vault enforces **cheap Black-Scholes-independent bounds
-on-chain**: `premium ∈ [floor, ceil]` where the bounds are premium formulas that do NOT
-need σ, e.g. floor = discounted intrinsic `max(0, ±(S − K))`-ish and ceil = a
-conservative cap band derived from S and the 2N envelope (further work to pin exact
-formulas; a σ-free arccos-style bound is possible but even `ceil ≤ N` and
-`floor = intrinsic` may be the right V1 pair). The provider is economically policed by
-the veto mechanism already: an attacker can always open the tile against the pool if
-the premium is below fair value (LP erosion only leaks within the capped band, and
-unfairly *high* premiums just lose business).
+`premium` argument, and the vault enforces **on-chain bounds** `premium ∈ [floor, ceil]`.
 
+**Trust model — PINNED (review gap 1, dixia/IRMarket#11 comment 2026-10-16):**
+a caller-supplied premium with only `[floor, ceil]` enforcement degenerates to
+`trader passes floor every time`. The vault therefore carries an immutable
+`pricingProvider_` constructor parameter — same ownerless pattern as `feeBps` /
+`priceBase` / `oracle` (set at deploy; changing it = redeploy = new LP session, exactly
+the per-pair vault convention). The provider **ECDSA-signs** the premium:
+`openPosition(side, premium, nAtRisk, tenorBlocks, deadline, sig)` reverts
+`PremiumNotAuthorized` unless `ecrecover(keccak256(vault, pair, premium, nAtRisk,
+tenorBlocks, deadline)) == pricingProvider` and `block ≤ deadline`. There is NO admin
+and no whitelist mutation; for the judging-demo fallback the provider may be set to
+`address(0)`, which re-enables trader-supplied premiums inside the bounds (accepted,
+demo-only). The veto mechanism remains the economic police: below-fair premiums lose
+LP money within the capped band only; above-fair premiums just lose business.
+
+**Bounds — PINNED formulas (review gap 3):** a σ-free envelope is `[intrinsic, S]` =
+`[0, N]` at ATM — it binds nothing, so any working floor embeds a σ assumption; pinned
+here instead of left as "further work":
+
+```
+floor = max(intrinsic, K_FLOOR × 0.4 · σ_deploy · √T · N)      // per open
+ceil  = min(K_CEIL × floor, 0.10 · N)                          // per open
+K_FLOOR = 2.5    K_CEIL = 4
+```
+
+Rationale: the data anchor from §8 is `ATM premium ≈ 0.4·σ√T` per unit notional, so
+`2.5 × realized-σ ATM premium ≈ 1.43%/round` — the minimum that keeps LP whole against
+the flat-1% book (consistent with IV_floor ≈ 1.2–1.5×, §8). The 0.4 factor is the
+analytic ATM call (Φ(σ√T/2)−1)·≈0.4 at small σ√T; σ_deploy is the deploy-time constant
+of §-below (gap 2), NOT caller-supplied.
+
+
+**σ dependency — PINNED (review gap 2):** the floor/ceil above reference `σ_deploy`, a
+**deploy-time immutable constant per vault** (chosen off-chain from realized history at
+deploy). This deliberately accepts option-C's frozen-σ weakness in exchange for
+ownerless simplicity; the alternative — an on-chain realized-vol ring buffer
+(~20k gas/settlement + storage + a new attack surface, §2(iii)) — is **V1.1 scope,
+not assumed**. Until the ring buffer ships, the provider recomputes realized vol
+off-chain each round and must stay inside `[floor, ceil]`; regime shifts beyond the
+band are handled by the same answer as every other immutable parameter: redeploy =
+new LP session.
 - Pro: zero math on the hot path (saves the ~+10–24% per open of A); premium quality
   improves smoothly with provider sophistication (realized-vol forecasts, skews) without
   contract redeploys; keeps the no-admin property — providers make money only if their
@@ -184,7 +216,17 @@ Today `openPosition(side, depositAmount, tenorBlocks)` treats `depositAmount` as
 the premium paid and the source of the at-risk band (`fee = depositAmount × feeBps`,
 `notional = depositAmount − fee`, `maxPayout = 2 × notional`). To decouple:
 
-- **Signature (spec intent, exact names TBD)**: `openPosition(side, premium, nAtRisk,
+- **Signature (pinned)**: `openPosition(side, premium, nAtRisk, tenorBlocks, deadline,
+  sig)` with immutable `pricingProvider_` in the constructor (see §3-B trust model).
+  Legacy note: the earlier draft read `openPosition(side, premium, nAtRisk,
+  tenorBlocks)` with no authorization path — superseded.
+  Historical alternative per pool design: `nAtRisk` derived on-chain from the premium by an
+  on-chain "insurance-style" conversion rule; that keeps the trader surface at
+  `openPosition(side, premium, tenorBlocks)` but couples premium → N through
+  pool-chosen policy. V1 default: keep the **explicit N** — it preserves the 2N cap
+  envelope honesty and makes the LP exposure per open legible; premium and N are then
+  separately bounded (premium ≥ some function of (S, T, σ) per §3-B bounds; N ≥ 0,
+  both in settlement token).
   tenorBlocks)` — the trader declares both what they pay and what at-risk band they buy.
   Alternative per pool design: `nAtRisk` derived on-chain from the premium by an
   on-chain "insurance-style" conversion rule; that keeps the trader surface at
@@ -293,6 +335,24 @@ CSV `docs/design/lp-pool-premium-backtest-2026-10-16.csv`. Notional per round:
   income is a bet that **charged IV ≥ realized vol + margin**.
 - ⚠️ DATA TOO SPARSE for sizing conclusions (15 rounds, one pair, mostly one bot;
   treat direction, not magnitudes). Re-run after the demo accumulates a clean week.
+
+### Two-side book (post-review extension; fresh run: 20 marks / 17 rounds, 15 priced)
+
+Review reproduction on fresh data confirmed the committed numbers (BSM call book net
+−9.79 vs flat −3.56; σ/round 1.465%; 11/15 rounds paid > premium). The pool sells
+**both** sides, so the tool now also prices the put (parity: `put = call − S + K`):
+
+| Straddle book (call+put, 100 HKD each) | Σ premium | Σ payout | Net LP PnL |
+|---|---|---|---|
+| BSM @ realized σ | 17.53 HKD | 23.38 HKD | **−5.85 HKD** |
+| MVP 1% flat (1 HKD/side) | 30.00 HKD | 23.38 HKD | **+6.62 HKD** |
+| BSM @ σ×1.5 | 26.29 HKD | 23.38 HKD | **+2.91 HKD** |
+
+The hedged straddle removes the directional tail (payout = units·|S1−S0| capped), so
+the book's PnL is premium-vs-|move| rather than the call-only tail loss — and at
+**σ×1.5 the straddle flips positive (+2.91)**: the first configuration where the
+premium-priced pool out-earns the flat book. This is the empirical support for the
+§3-B `IV_floor ≥ 1.2–1.5× realized` bound and for charging premium + 1% combined.
 
 Interpretation for §3-C (bounds design): an on-chain envelope should sit at
 `premium ≥ IV_floor × realizedVolEnvelope` with IV_floor ≈ 1.2–1.5× observed realized vol

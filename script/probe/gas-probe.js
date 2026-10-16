@@ -3,7 +3,9 @@
 // Gas probe runner for the throwaway BSM pricing contract (contracts/probe/BsmPricingProbe.sol).
 //
 // Run (after `npx hardhat compile`):
-//   $env:RPC_URL="https://<your-rpc>"; npx hardhat run --network hardhat script/probe/gas-probe.js
+//   $env:RPC_URL="https://<your-rpc>"; npx hardhat run script/probe/gas-probe.js
+//   (no --network flag: this repo's Hardhat 3 config defines no named networks;
+//    the run uses the in-process hardhat network by default)
 //
 // Uses Hardhat 3's in-process network for deployment + gas measurement, so there is no
 // background node to clean up. RPC_URL is only used READ-ONLY (eth_getTransactionReceipt)
