@@ -235,7 +235,7 @@ IRMarket 是部署在 Monad 区块链上的**奇异标的链上多空市场**：
 
 #### 4.1.2 IRMarket 薄层（✅ D-11/D-14：费用包裹 + 工厂）
 
-- `createMarket(base, quote, expiryBlock, feeBps, marketMaker)` 工厂注册——**不去重**（D-14）：同一标的可并存多个市场（不同到期/费率），每轮 = 新 marketId；创建时对 oracle `forceApprove` 两种代币（gas 上限 ≈2M）
+- `createMarket(base, quote, expiryBlock, feeBps, marketMaker)` 工厂注册——**不去重**（D-14）：同一标的可并存多个市场（不同到期/费率），每轮 = 新 marketId；创建时对 oracle `forceApprove` 两种代币，但**仅当 oracle 尚未持有额度时**才发（幂等，spender/amount 不变；未加保护前每次重复批准白烧 ~40k gas）。`Market` 的 `feeBps`/`expiryBlock`/`createdAtBlock` 打包进同一 slot。gas 上限 ≈250k（Monad 按 limit 计费，实测见 sc-tech-spec §7）
 - **费用包裹（D-11/D-16）**：入口函数按 HKD 名义额扣 1%（看涨加付入端、看跌从收付出扣）→ 代用户执行 veto（看涨/看跌两个入口函数）
 - `openLong`/`openShort`/`createMarket` 入口 + `markets`/`nextMarketId` 读取 + `version()`（返回 `"0.9.0-vetomarket"` 标注构建）
 - **事件索引**：`MarketCreated` 索引 `marketId`/`baseToken`/`quoteToken`（`marketMaker`/`expiryBlock`/`feeBps` 在 data）；`VetoWrapped` 索引 `quoteId`/`marketId`/`trader`（`side`/金额/`fee` 在 data）——与 `web/src/lib/abis/market.ts` 一致

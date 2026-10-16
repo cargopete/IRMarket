@@ -46,14 +46,59 @@ SETTLED_WITHDRAWN = 4
 # `ExpiryTooFar`. Mirror ../monoracle Monoracle.sol (`MAX_VERIFICATION_SLOTS`).
 MAX_VERIFICATION_SLOTS = 12000
 
-# Fixed gas limits (Monad bills by gas LIMIT — sc-tech-spec §7). Skip estimateGas.
-GAS = {
-    "approve": 100_000,
-    "submit_quote": 600_000,
-    "settle": 150_000,
-    "withdraw": 200_000,
-    "create_market": 2_000_000,
+# Fixed gas limits — Monad bills the gas LIMIT, not gas used (sc-tech-spec §7), so an
+# inflated limit burns MON on every single send. These are measured gasUsed plus
+# head-room, not round numbers pulled out of the air:
+#
+#   approve         33,586   live eth_estimateGas on the deployed quote token
+#   submit_quote   292,944   live eth_estimateGas on the deployed oracle
+#   settle          65,429   live eth_estimateGas on the deployed oracle
+#   withdraw        74,295   script/gas-report.js (settled + vetoed variants)
+#   create_market 198,542   live eth_estimateGas on the deployed wrapper; it is
+#                           this high because createMarket makes two unconditional
+#                           forceApprove calls (contracts/IRMarket.sol). The guard
+#                           added there cuts it ~25% (locally 181,968 -> 135,212),
+#                           i.e. ~150,000, so 250,000 covers both the deployed and
+#                           the fixed contract.
+#
+# Re-measure with `npx hardhat run script/gas-report.js` (local) or eth_estimateGas
+# (live) before changing any of these. test/gas.test.js fails if a limit drops below
+# what the contracts actually need.
+#
+# WARNING: on Monad eth_getTransactionReceipt.gasUsed equals the gas limit you sent,
+# so the bot's own "ok (gas N)" log line is NOT a usage measurement — never tune this
+# table from it.
+#
+# Each entry is overridable with GAS_<OP>_WEI (e.g. GAS_SUBMIT_QUOTE_WEI=500000) so a
+# limit can be bumped in production without a code change.
+GAS_DEFAULTS = {
+    "approve": 60_000,
+    "submit_quote": 400_000,
+    "settle": 100_000,
+    "withdraw": 120_000,
+    "create_market": 250_000,
 }
+
+
+def _load_gas_table() -> dict[str, int]:
+    table: dict[str, int] = {}
+    for op, default in GAS_DEFAULTS.items():
+        env_name = f"GAS_{op.upper()}_WEI"
+        raw = os.getenv(env_name)
+        if raw is None:
+            table[op] = default
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            raise RuntimeError(f"{env_name} must be an integer gas limit, got {raw!r}")
+        if value < 21_000:
+            raise RuntimeError(f"{env_name}={value} is below the 21,000 intrinsic tx cost")
+        table[op] = value
+    return table
+
+
+GAS = _load_gas_table()
 
 
 def _load_abi(rel_path: str) -> list[dict]:
@@ -605,6 +650,12 @@ def main() -> None:
             "[%s] marketId=%s pair %s/%s expiryHint=%s",
             b.symbol, b.market_id, b.base_token, b.quote_token, b.expiry_hint,
         )
+    # Surface the table on every start: Monad charges the limit, so this line IS the
+    # bot's per-send cost and should be re-checked whenever a limit looks suspicious.
+    log.info(
+        "gas limits (Monad bills the limit, not gasUsed): %s",
+        " ".join(f"{k}={v:,}" for k, v in GAS.items()),
+    )
     run_all(bots, once="--once" in sys.argv)
 
 

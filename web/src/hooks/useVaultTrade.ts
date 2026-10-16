@@ -11,7 +11,14 @@ import type { VaultSideValue } from "@/lib/vault";
 
 export type VaultWritePhase = "idle" | "pending" | "success" | "error";
 
-const GAS_VAULT_WRITE = 500_000n;
+// Fixed gas limits per vault write. Monad bills gas_limit × price_per_gas (NOT
+// gasUsed), so an inflated limit overcharges the user on every action. Measured with
+// `npx hardhat run script/gas-report.js` + ~50% head-room:
+//   deposit 132,206 | withdraw 61,663 | openPosition 233,385-267,573 | settle 83,747
+const GAS_VAULT_DEPOSIT = 200_000n;
+const GAS_VAULT_WITHDRAW = 120_000n;
+const GAS_VAULT_OPEN = 400_000n;
+const GAS_VAULT_SETTLE = 150_000n;
 const GAS_APPROVE = 60_000n;
 
 export function useVaultTrade(): {
@@ -65,7 +72,7 @@ export function useVaultTrade(): {
         abi: VAULT_ABI,
         functionName: "deposit",
         args: [amount],
-        gas: GAS_VAULT_WRITE,
+        gas: GAS_VAULT_DEPOSIT,
       });
     },
     [writeContract],
@@ -78,7 +85,7 @@ export function useVaultTrade(): {
         abi: VAULT_ABI,
         functionName: "withdraw",
         args: [shareAmount],
-        gas: GAS_VAULT_WRITE,
+        gas: GAS_VAULT_WITHDRAW,
       });
     },
     [writeContract],
@@ -91,7 +98,7 @@ export function useVaultTrade(): {
         abi: VAULT_ABI,
         functionName: "openPosition",
         args: [side, depositAmount, tenorBlocks],
-        gas: GAS_VAULT_WRITE,
+        gas: GAS_VAULT_OPEN,
       });
     },
     [writeContract],
@@ -104,7 +111,7 @@ export function useVaultTrade(): {
         abi: VAULT_ABI,
         functionName: "settlePosition",
         args: [positionId],
-        gas: GAS_VAULT_WRITE,
+        gas: GAS_VAULT_SETTLE,
       });
     },
     [writeContract],

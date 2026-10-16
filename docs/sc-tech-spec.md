@@ -145,10 +145,15 @@ function createMarket(
 - **Access:** anyone (开市权, D-07). **Requirements:** tokens non-zero & distinct;
   `feeBps < 10000`; `expiryBlock > block.number`.
 - **Effects:** create `Market`; `nextMarketId++`; **grant the oracle allowance** so the
-  wrapper can veto with this pair's tokens:
-  `IERC20(baseToken).forceApprove(oracle, type(uint256).max)` and same for `quoteToken`
-  (`forceApprove` rather than `approve` — safe for tokens that require zero-then-approve).
-  The two `forceApprove` calls dominate the tx cost → gas limit ≈ 2M (see §7).
+  wrapper can veto with this pair's tokens. The approval is *idempotent* — spender is
+  always `oracle`, amount is always max — so it is only issued when the oracle does not
+  already hold one (`_ensureOracleAllowance`, §3.3). Re-approving on every call was pure
+  waste: `createMarket` runs once per pair per round and the two unconditional
+  `forceApprove`s it used to make dominated the tx cost (measured 221,768 → 181,968 gas
+  locally, 198,542 → ~158,000 on Monad testnet). `forceApprove` is retained (rather than
+  `approve`) because it is safe for tokens that require zero-then-approve.
+  `Market` also packs `feeBps`/`expiryBlock`/`createdAtBlock` into one slot, which is
+  worth another ~7k per call. Gas limit ≈ 250k (see §7).
 - **Emission:** `MarketCreated(marketId, baseToken, quoteToken, marketMaker, expiryBlock, feeBps)`.
 - No tokens move in this call. `expiryBlock` is **advisory for the contract** (the wrapper has
   no settlement logic); it drives the bot's per-quote `expiryBlock` (D-13/D-06) and the UI
@@ -346,12 +351,28 @@ when a quote settles (B12).
 - **Window:** per-quote `expiryBlock` (D-13) — no more 2-slot (~600ms) trade race (B8
   closed); the UI shows a market-level countdown instead of a per-quote one, plus a "no
   tradeable quote" fallback when the bot is off (B4).
-- **Gas model:** Monad bills **gas limit**, not gas used. Set fixed limits: wrapper
-  `openLong/openShort` ≈ 450k (wrapper transfers + oracle veto ≈ 250–300k); fork refs
-  (upstream-consistent +1 storage write): `submitQuote` 600k, veto 300k, `settleValidQuote`
-  150k, `withdrawProviderFunds` 200k; wrapper `createMarket` **2M** (two `forceApprove`
-  dominates, §3.3); ERC20 `approve` 100k. The bot's `GAS` table (`bot/verifier.py`)
-  mirrors these.
+- **Gas model:** Monad bills **gas limit**, not gas used. Set fixed limits. Current
+  measured values (gasUsed + head-room; re-measure with
+  `npx hardhat run script/gas-report.js` or live `eth_estimateGas`):
+
+  | Op | Measured gasUsed | Limit | Where |
+  |---|---|---|---|
+  | `createMarket` | 198,542 (old) / ~150,000 (guarded) | 250,000 | bot `GAS` |
+  | `submitQuote` | 292,944 | 400,000 | bot `GAS` |
+  | `settleValidQuote` | 65,429 | 100,000 | bot `GAS` |
+  | `withdrawProviderFunds` | 74,295 | 120,000 | bot `GAS` |
+  | ERC20 `approve` | 33,586 | 60,000 | bot `GAS` + web |
+  | `openLong` / `openShort` | 138,547–152,148 (mock; ~170,000 real) | 260,000 | web |
+  | `vetoUnderpriced` / `vetoOverpriced` | 77,122 (mock; ~86,000 real) | 160,000 | web |
+  | vault writes | 61,663–267,573 | 120,000–400,000 | web |
+
+  **Critical gotcha:** on Monad `eth_getTransactionReceipt.gasUsed` **equals the gas
+  limit you sent** — it is not a usage figure. The bot's `ok (gas N)` log line therefore
+  proves nothing about how much work a tx did; all tuning must come from
+  `estimateGas` / `script/gas-report.js`. `test/gas.test.js` fails if any limit drifts
+  outside 120–400% of measured usage, which is the tripwire that keeps the table honest.
+  Every bot limit is overridable with `GAS_<OP>_WEI` so it can be bumped without a
+  code change.
 - **Parallel execution:** per-quote storage (`quotes[]`) touches disjoint slots across ids;
   the wrapper adds no global contention.
 - **Streaming RPC:** `VetoWrapped` + the fork's 5 events drive the indexer/UI; keep params

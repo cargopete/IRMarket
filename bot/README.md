@@ -37,6 +37,23 @@ cp .env.example .env   # fill PRIVATE_KEY, MARKET_ID, addresses
 See `.env.example` for all parameters. Key round controls: `MARKET_ID`, `ROUND_BLOCKS`,
 `AUTO_CREATE_MARKET`, `FEE_BPS`, `SETTLEMENT_QUOTE_LEAD_BLOCKS`.
 
+## Gas
+
+Monad charges **gas limit × price**, not gas used — so an inflated limit is money
+burned on every send. The bot therefore sends fixed limits from the `GAS` table in
+`verifier.py` (each overridable with `GAS_<OP>_WEI`, e.g. `GAS_SUBMIT_QUOTE_WEI`).
+
+**Never tune the table from the bot's own logs.** On Monad
+`eth_getTransactionReceipt.gasUsed` equals the limit you sent, so the `ok (gas N)` line
+is not a usage measurement. Re-measure instead:
+
+```bash
+npx hardhat run script/gas-report.js   # every write path, gasUsed + recommended limit
+```
+
+`test/gas.test.js` fails if any limit drifts outside 120–400% of measured usage, in
+either direction (too tight = reverts, too loose = overpaying).
+
 ## Production Deployment
 
 ( TODO — replace the static `PriceFeed` with a real 06658.HK feed per D-12/B5.)
