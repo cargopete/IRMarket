@@ -59,3 +59,8 @@ _Tracking convention: this file is only an index — each item references a GH i
 
 - GH: https://github.com/dixia/IRMarket/issues/17
 - Status: **OPEN** — 依赖：无，优先搭建（底盘）；输出：多项目任务系统、Agent 认领 task、每日自动报告。
+
+## Bot: the mark quote reverts on testnet (delivery latency, wide)
+
+- GH: https://github.com/dixia/IRMarket/issues/22
+- Status: **OPEN** — config mitigation shipped (`bot/.env.example` lead 2 → 30); probes listed for an agent run: latency histogram, public-vs-paid-RPC comparison, verify the mark lands at 30, then decide code vs config.
