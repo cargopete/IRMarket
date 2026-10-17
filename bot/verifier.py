@@ -65,7 +65,9 @@ MAX_VERIFICATION_SLOTS = 12000
 #   approve         33,586   live eth_estimateGas on the deployed quote token
 #   submit_quote   292,944   live eth_estimateGas on the deployed oracle
 #   settle          65,429   live eth_estimateGas on the deployed oracle
-#   withdraw        74,295   script/gas-report.js (settled + vetoed variants)
+#   withdraw       123,194   live eth_estimateGas on the UPSTREAM oracle (the old
+#                           fork needed only 74,295; 120,000 was too tight here and
+#                           made every withdraw revert out-of-gas)
 #   create_market 198,542   live eth_estimateGas on the deployed wrapper; it is
 #                           this high because createMarket makes two unconditional
 #                           forceApprove calls (contracts/IRMarket.sol). The guard
@@ -87,7 +89,7 @@ GAS_DEFAULTS = {
     "approve": 60_000,
     "submit_quote": 400_000,
     "settle": 100_000,
-    "withdraw": 120_000,
+    "withdraw": 200_000,
     "create_market": 250_000,
 }
 
