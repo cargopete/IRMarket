@@ -32,7 +32,7 @@ const BOT_GAS = {
   approve: 60_000n,
   submit_quote: 400_000n,
   settle: 100_000n,
-  withdraw: 120_000n,
+  withdraw: 200_000n,
   create_market: 250_000n,
 };
 
@@ -62,6 +62,16 @@ function assertSane(label, receipt, limit) {
   expect(ratio, `${label}: gasUsed ${used} vs limit ${limit} (${ratio}% head-room)`)
     .to.be.gte(MIN_HEADROOM)
     .and.lte(MAX_HEADROOM);
+}
+
+/** Same lower bound as `assertSane`, without the upper bound: for paths where the local
+ *  mock's measured usage is NOT a proxy for the contract shape production actually runs
+ *  (the upstream Monoracle's withdraw path takes ~2.5x more gas than the mock's). */
+function assertSaneFloor(label, receipt, limit) {
+  const used = receipt.gasUsed;
+  const ratio = (limit * 100n) / used;
+  expect(ratio, `${label}: gasUsed ${used} vs limit ${limit} (${ratio}% head-room)`)
+    .to.be.gte(MIN_HEADROOM);
 }
 
 async function currentBlock() {
@@ -188,7 +198,12 @@ describe("gas limits — regression guard (Monad bills the limit, not gasUsed)",
     const withdrawLong = await (
       await oracle.connect(provider).withdrawProviderFunds(longId)
     ).wait();
-    assertSane("withdrawProviderFunds (vetoed)", withdrawLong, BOT_GAS.withdraw);
+    // The cap is enforced on the SETTLED variant above, which is the largest of the two
+    // usages this same call takes locally. The vetoed variant cannot carry it: placing
+    // the max on the smaller number is what produced a false 412% alarm when the bot's
+    // withdraw limit was raised for the LIVE upstream oracle — locally we can only ever
+    // measure the mock's shape, and the mock's vetoed variant is by far the cheaper one.
+    assertSaneFloor("withdrawProviderFunds (vetoed)", withdrawLong, BOT_GAS.withdraw);
 
     const shortReceipt = await (
       await oracle.connect(provider).submitQuote(base.target, quote.target, E18, 100n * E18, expiry)
