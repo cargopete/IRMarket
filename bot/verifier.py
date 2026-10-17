@@ -329,7 +329,11 @@ class MarketMakerBot:
         self.expiry_hint = pair.expiry_block
 
         self.market_id = pair.market_id
-        self.lead_blocks = int(os.getenv("SETTLEMENT_QUOTE_LEAD_BLOCKS", "2"))
+        # 30 = ~10 s of budget at ~330 ms blocks: the mark quote must be INCLUDED
+        # strictly before its own expiry, and the stage run measured delivery latencies
+        # of 3, 7 and 28 blocks on the same shape of tx — so the lead has to cover the
+        # observed distribution, not the median. dixia/IRMarket#22 carries the probes.
+        self.lead_blocks = int(os.getenv("SETTLEMENT_QUOTE_LEAD_BLOCKS", "30"))
         self.round_blocks = int(os.getenv("ROUND_BLOCKS", "6000"))  # ~30 min @300ms
         self.auto_create = os.getenv("AUTO_CREATE_MARKET", "1") == "1"
         # Demo: re-quote every loop (even with an active quote) so the canonical price
@@ -343,8 +347,30 @@ class MarketMakerBot:
 
         self._nonce = None  # property → the shared BotContext nonce cursor
         self._final_submitted = False
-        self._withdrawn: set[int] = set()
-        self._own_quotes: set[int] = set()
+        #
+        # Bounded quote bookkeeping (replaces the old ever-growing `_own_quotes`):
+        #
+        #   _own_current  our own ids for the CURRENT round, status ACTIVE — drives the
+        #                 restock decision and is cleared when the round rolls. ≤ a few.
+        #   _pending_own  our own ids still owed an action (endpoint-reached: vetoed, or
+        #                 settled but not yet withdrawn), ANY round. An entry is dropped
+        #                 the moment its withdraw succeeds, so the set only ever holds
+        #                 unresolved leftovers — not a lifetime ledger.
+        #
+        # The old layout made the per-step cost O(all our own ids) and each round roll
+        # O(the whole ledger): both grow without bound, and since the oracle is SHARED
+        # across pairs/processes, the sweep alone was ~2 min of RPC per step for a
+        # 3.4-min round — the bot then spent the round chasing its own steps, which is
+        # where the near-expiry quotes that revert `ExpiryMustBeFuture` came from.
+        self._own_current: set[int] = set()
+        self._pending_own: set[int] = set()
+        self._booted = False  # the startup recover-scan runs once, inside step()
+        # Per-step read cache. Only consulted by readers that do NOT gate a send: a
+        # written decision must always use a fresh `_quote`, because a cached status that
+        # just changed on-chain could tip us into paying for a tx that then reverts
+        # (Monad bills the gas LIMIT, not what a tx used).
+        self._read_cache: dict[int, dict] = {}
+        self._read_count = 0  # per-step quote/market reads, logged at DEBUG (see step)
 
     @property
     def _nonce(self) -> Optional[int]:
@@ -403,7 +429,16 @@ class MarketMakerBot:
     )
 
     def _quote(self, qid: int) -> dict:
+        self._read_count += 1
         return dict(zip(self._QUOTE_FIELDS, self.oracle.functions.quotes(qid).call()))
+
+    def _quote_cached(self, qid: int) -> dict:
+        """`_quote` for readers that do NOT decide a send. Anything that will lead to a
+        transaction (a settle, a withdraw) must call `_quote` directly so the decision is
+        made on the balance actually on-chain, never on a cached status."""
+        if qid not in self._read_cache:
+            self._read_cache[qid] = self._quote(qid)
+        return self._read_cache[qid]
 
     # ---------------------------------------------------------------- actions
 
@@ -421,31 +456,49 @@ class MarketMakerBot:
             log.info("approving oracle for %s...", token)
             self._send(tok.functions.approve(self.oracle_addr, 2**256 - 1), GAS["approve"], "approve")
 
-    def _rescan_own_quotes(self) -> None:
-        """Index quotes we are the provider of for THIS pair by scanning the quote
-        ledger directly (no get_logs — the public RPC 413s on wide log ranges). The
-        oracle is shared across pairs, so filter by our tokens: each instance keeps
-        its own `_own_quotes` and never acts on another pair's quotes."""
+    def _rescan_own_quotes(self, round_expiry: int) -> None:
+        """Startup recovery: re-hydrate `_own_current` / `_pending_own` after a restart.
+
+        Scans the ledger BACKWARD (no `eth_getLogs` — the public RPC rejects wide ranges)
+        and stops early: after 20 consecutive strangers or at the first quote whose
+        expiry precedes the current round, because nothing older can be ours for this
+        round either. Only called once per process — forward progress relies on the
+        receipt id, not on rescanning.
+
+        The oracle is shared across pairs/processes, so reads are filtered by our tokens;
+        each instance never acts on another pair's quotes."""
         next_id = self.oracle.functions.nextQuoteId().call()
         consecutive_strangers = 0
         for qid in range(next_id - 1, 0, -1):
             q = self._quote(qid)
+            if q["expiryBlock"] < round_expiry:
+                break  # nothing older can belong to this round — stop scanning
             if q["provider"].lower() == self.address.lower():
                 consecutive_strangers = 0
-                if q["baseToken"].lower() == self.base_token.lower() and q["quoteToken"].lower() == self.quote_token.lower():
-                    self._own_quotes.add(qid)
+                if q["baseToken"].lower() != self.base_token.lower() or q["quoteToken"].lower() != self.quote_token.lower():
+                    continue
+                if q["status"] == ACTIVE:
+                    self._own_current.add(qid)
+                elif q["status"] in (SETTLED_VALID, VETOED_UNDERPRICED, VETOED_OVERPRICED):
+                    self._pending_own.add(qid)
+                else:
+                    log.debug(
+                        "[%s] q%s already withdrawn — nothing to recover", self.symbol, qid,
+                    )
             else:
                 consecutive_strangers += 1
                 if consecutive_strangers >= 20:
                     break
 
     def _active_own_quote(self, round_expiry: int) -> Optional[int]:
-        """Our newest ACTIVE quote for THIS round (expiryBlock == market expiry), if any."""
+        """Our newest ACTIVE quote for THIS round (expiryBlock == market expiry), if any.
+
+        Bounded: only `_own_current` — the lifetime of an entry is exactly one round, so
+        this is a couple of reads, not an O(all history) sweep. Reads may use the cache:
+        a wrong "still ACTIVE" only costs a step of restock, it cannot send anything."""
         active = None
-        for qid in self._own_quotes:
-            q = self._quote(qid)
-            if q["baseToken"].lower() != self.base_token.lower() or q["quoteToken"].lower() != self.quote_token.lower():
-                continue
+        for qid in self._own_current:
+            q = self._quote_cached(qid)
             if q["expiryBlock"] != round_expiry:
                 continue  # belongs to a different round
             if q["status"] == ACTIVE:
@@ -472,10 +525,16 @@ class MarketMakerBot:
         )
         # Parse the event from logs emitted by the oracle only (avoids web3's
         # "MismatchedABI" warnings for ERC20 Transfer logs in the same tx).
-        qid = self._oracle_event_id(receipt, "QuoteSubmitted")
-        if qid is None:
-            qid = qid_before
-        self._own_quotes.add(qid)
+        candidate = self._oracle_event_id(receipt, "QuoteSubmitted")
+        if candidate is None:
+            candidate = qid_before
+        # Verify the candidate really is ours before it becomes bookkeeping: a fallback
+        # id can be off by one when another provider's quote punched in before ours
+        # landed, and acting on a stranger's id would be a real hazard. Checking is one
+        # fresh read; only the fallback path can misfire, and it only everundershoots —
+        # so the correction walks FORWARD, at most 3 ids.
+        qid = self._resolve_own_quote(candidate, expiry_block)
+        self._own_current.add(qid)
         log.info(
             "[%s] quoted id=%s base=%s quote=%s price=%s (fair=%s)",
             self.symbol, qid, self.quote_base / E18, quote_amount / E18,
@@ -503,12 +562,50 @@ class MarketMakerBot:
             return int(lg["topics"][1].hex(), 16)
         return None
 
+    def _resolve_own_quote(self, candidate: int, expiry_block: int) -> int:
+        """Fresh reads only: this gates a send, so the cached path is off-limits here.
+
+        Returns the qid once our pair+provider+expiry match, walking forward at most 3
+        ids; a missing id reads as "not ours" and just keeps walking. Falls back to the
+        candidate so a transient chain that already cleaned the ledger cannot wedge the
+        step."""
+        for qid in range(candidate, candidate + 4):
+            try:
+                q = self._quote(qid)
+            except Exception:
+                continue  # id not (yet) in the ledger — a valid "not ours"
+            if (
+                q["provider"].lower() == self.address.lower()
+                and q["baseToken"].lower() == self.base_token.lower()
+                and q["quoteToken"].lower() == self.quote_token.lower()
+                and q["expiryBlock"] == expiry_block
+            ):
+                return qid
+        log.warning(
+            "[%s] submit: candidate id %s is not ours after 4 reads — keeping it anyway",
+            self.symbol, candidate,
+        )
+        return candidate
+
     def watch_vetoes(self) -> None:
-        """FR-BOT-004: withdraw the 2x return on our vetoed quotes, log P&L."""
-        for qid in sorted(self._own_quotes):
-            if qid in self._withdrawn:
+        """FR-BOT-004: withdraw the 2x return on our vetoed quotes, log P&L.
+
+        Bounded: only `_own_current | _pending_own`. An id is removed the moment its
+        withdraw succeeds, so the sweep's size is exactly "what is still owed" and stops
+        growing with round history. Also withdraws a SETTLED_VALID id whose withdraw
+        didn't land when it was settled — a pure cleanup, because withdrawing does not
+        touch `latestValidQuoteId`, so it cannot rewind the canonical mark."""
+        for qid in sorted(self._own_current | self._pending_own):
+            q = self._quote(qid)  # fresh read: this gates a send
+            if q["status"] == SETTLED_VALID:
+                # a settle that landed without its withdraw (crash, RPC blip) — a pure
+                # cleanup: withdrawing never touches `latestValidQuoteId`, so this cannot
+                # rewind the canonical mark.
+                self._send(self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}")
+                self._own_current.discard(qid)
+                self._pending_own.discard(qid)
+                log.info("[%s] cleanup: settled-but-unwithdrawn q%s recovered", self.symbol, qid)
                 continue
-            q = self._quote(qid)
             if q["status"] not in (VETOED_UNDERPRICED, VETOED_OVERPRICED):
                 continue
             base_amt, quote_amt = q["baseAmount"], q["quoteAmount"]
@@ -522,38 +619,53 @@ class MarketMakerBot:
                 pnl_hkd = base_amt * fair // E18 - quote_amt
                 side = "OVERPRICED (trader went SHORT)"
             self._send(self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}")
-            self._withdrawn.add(qid)
+            self._own_current.discard(qid)
+            self._pending_own.discard(qid)
             log.warning(
                 "[%s] VETO q%s %s | pnl≈%s HKD (base %s, quote %s, fair %s)",
                 self.symbol, qid, side, pnl_hkd / E18, base_amt / E18, quote_amt / E18, fair,
             )
 
     def settle_round(self, round_expiry: int) -> None:
-        """After expiry: settle THIS round's ACTIVE quotes oldest-first; final quote last
-        becomes the canonical 终价 (D-06). Then withdraw our own funds.
-        Quotes are matched by the round's expiryBlock so a stale run never touches the
-        live round's quotes."""
-        next_id = self.oracle.functions.nextQuoteId().call()
+        """After expiry: settle OUR OWN ACTIVE quotes for THIS round, oldest-first — the
+        last one settled is our highest id, so it becomes the canonical mark (D-06/终价).
+        Then withdraw everything still owed.
+
+        Bounded two ways:
+          * only OUR ids (`_own_current | _pending_own`) — the old `range(1, nextQuoteId)`
+            sweep walked the whole LEDGER (~150 ids and growing, since the oracle is
+            shared across pairs/processes), which is what made a step take minutes;
+          * quoting-match is preserved exactly (expiryBlock == round_expiry), so a stale
+            run still cannot touch the live round's quotes, and an active quote from an
+            older round is NOT settled late (a late settle rewrites
+            `latestValidQuoteId`, i.e. it would rewind the mark) — it is left for whoever
+            settles it permissionlessly, as before.
+        """
         settled_ids = []
-        for qid in range(1, next_id):
-            q = self._quote(qid)
-            if q["baseToken"].lower() != self.base_token.lower() or q["quoteToken"].lower() != self.quote_token.lower():
-                continue
+        for qid in sorted(self._own_current | self._pending_own):
+            q = self._quote(qid)  # fresh read: every branch here gates a send
             if q["expiryBlock"] != round_expiry:
-                continue  # belongs to a different round
+                # belongs to a different round. A still-ACTIVE one is NOT settled late:
+                # any settle rewrites `latestValidQuoteId`, so a late settle would rewind
+                # the new round's canonical mark. It stays for whoever settles it
+                # permissionlessly; watch_vetoes still owns the pending (withdrawable)
+                # leftovers of older rounds.
+                continue
             if q["status"] == ACTIVE:
                 self._send(self.oracle.functions.settleValidQuote(qid), GAS["settle"], f"settle q{qid}")
                 settled_ids.append(qid)
-        for qid in sorted(self._own_quotes - self._withdrawn):
-            q = self._quote(qid)
-            if q["expiryBlock"] != round_expiry:
-                continue
-            if q["status"] in (SETTLED_VALID, VETOED_UNDERPRICED, VETOED_OVERPRICED):
+                # the settle just made it withdrawable — withdraw in the same pass rather
+                # than re-reading, but keep the id in the sets until BOTH sends succeeded:
+                # if the withdraw tx fails, the next step's own settle_round (id still
+                # stored) runs the elif branch, so no escrow is ever stranded.
                 self._send(self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}")
-                self._withdrawn.add(qid)
+            elif q["status"] in (SETTLED_VALID, VETOED_UNDERPRICED, VETOED_OVERPRICED):
+                self._send(self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}")
+            self._own_current.discard(qid)
+            self._pending_own.discard(qid)
         price = self.oracle.functions.getLatestPrice(self.base_token, self.quote_token).call()
         log.info(
-            "[%s] round settled: canonical price=%s (settled %s quotes)",
+            "[%s] round settled: canonical price=%s (settled %s of our own quotes)",
             self.symbol, price[0], len(settled_ids),
         )
 
@@ -605,13 +717,26 @@ class MarketMakerBot:
 
     def step(self) -> None:
         """One iteration of the quoting loop for THIS pair (no sleep). Split out
-        from `run` so the multi-pair driver can advance every pair in turn."""
-        self._rescan_own_quotes()
-        block = self.w3.eth.block_number
+        from `run` so the multi-pair driver can advance every pair in turn.
+
+        No per-step rescan: forward progress is driven by the receipt id
+        (`_resolve_own_quote` verifies it once per submit); the bounded recover-scan runs
+        exactly once per process, on the first step."""
+        self._read_cache.clear()
+        self._read_count = 0
         market = self._market()
         base_t, quote_t, _mm, fee_bps, expiry, _created = market
         if base_t.lower() != self.base_token.lower() or quote_t.lower() != self.quote_token.lower():
             raise RuntimeError(f"[{self.symbol}] market {self.market_id} pair mismatch")
+        block = self.w3.eth.block_number
+
+        if not self._booted:
+            self._rescan_own_quotes(expiry)
+            self._booted = True
+            log.debug(
+                "[%s] recover-scan: %s current / %s pending after %s reads",
+                self.symbol, len(self._own_current), len(self._pending_own), self._read_count,
+            )
 
         log.debug("[%s] block=%s expiry=%s (%s left)", self.symbol, block, expiry, expiry - block)
 
@@ -620,6 +745,7 @@ class MarketMakerBot:
             # round's quotes and roll to a fresh one instead of crashing.
             self.settle_round(expiry)
             self.roll_round(expiry)
+            self._own_current.clear()
             return
 
         # veto watch + restock
@@ -632,6 +758,10 @@ class MarketMakerBot:
             self._final_submitted = True
         elif active is None or self.requote:
             self.submit_quote(expiry, "restock quote")
+
+        log.debug(
+            "[%s] step: %s quote reads", self.symbol, self._read_count,
+        )
 
     def run(self, once: bool = False) -> None:
         self._sync_nonce()

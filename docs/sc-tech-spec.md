@@ -357,10 +357,10 @@ when a quote settles (B12).
 
   | Op | Measured gasUsed | Limit | Where |
   |---|---|---|---|
-  | `createMarket` | 198,542 (old) / ~150,000 (guarded) | 250,000 | bot `GAS` |
+  | `createMarket` | 198,542 (unguarded, live) / 160,575 (guarded, live) | 250,000 | bot `GAS` |
   | `submitQuote` | 292,944 | 400,000 | bot `GAS` |
-  | `settleValidQuote` | 65,429 | 100,000 | bot `GAS` |
-  | `withdrawProviderFunds` | 74,295 | 120,000 | bot `GAS` |
+  | `settleValidQuote` | 48,180 (live upstream) | 100,000 | bot `GAS` |
+  | `withdrawProviderFunds` | 74,295 (mock) / **123,194 (live upstream)** | 200,000 | bot `GAS` |
   | ERC20 `approve` | 33,586 | 60,000 | bot `GAS` + web |
   | `openLong` / `openShort` | 138,547–152,148 (mock; ~170,000 real) | 260,000 | web |
   | `vetoUnderpriced` / `vetoOverpriced` | 77,122 (mock; ~86,000 real) | 160,000 | web |
