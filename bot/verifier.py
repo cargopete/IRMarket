@@ -329,7 +329,11 @@ class MarketMakerBot:
         self.expiry_hint = pair.expiry_block
 
         self.market_id = pair.market_id
-        self.lead_blocks = int(os.getenv("SETTLEMENT_QUOTE_LEAD_BLOCKS", "2"))
+        # 30 = ~10 s of budget at ~330 ms blocks: the mark quote must be INCLUDED
+        # strictly before its own expiry, and the stage run measured delivery latencies
+        # of 3, 7 and 28 blocks on the same shape of tx — so the lead has to cover the
+        # observed distribution, not the median. dixia/IRMarket#22 carries the probes.
+        self.lead_blocks = int(os.getenv("SETTLEMENT_QUOTE_LEAD_BLOCKS", "30"))
         self.round_blocks = int(os.getenv("ROUND_BLOCKS", "6000"))  # ~30 min @300ms
         self.auto_create = os.getenv("AUTO_CREATE_MARKET", "1") == "1"
         # Demo: re-quote every loop (even with an active quote) so the canonical price
