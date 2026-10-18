@@ -83,6 +83,7 @@ contract IRMarket is ReentrancyGuard {
     error QuotePairMismatch();
     error QuoteNotActive();
     error QuoteWindowExpired();
+    error MarketWindowExpired();
 
     // ============================================================
     // Events (Monad Streaming RPC compatible)
@@ -239,8 +240,28 @@ contract IRMarket is ReentrancyGuard {
     // Internal Helpers
     // ============================================================
 
-    /// @dev Validates a quote is tradeable against this market and returns it.
-    ///      Oracle's own modifiers are the backstop; these pre-checks give friendlier errors.
+    /**
+     * @dev Validates a quote is tradeable against this market and returns it.
+     *      Oracle's own modifiers are the backstop; these pre-checks give friendlier errors.
+     *
+     *      Two independent windows gate a trade, and the tighter one wins:
+     *        1. MARKET window — `block.number <= m.expiryBlock` (E = the round's last
+     *           trading block). Checked first: once the chain moves past E no quote may
+     *           be traded through this wrapper, whatever its own expiry says.
+     *        2. QUOTE window — `block.number <= q.expiryBlock`, the same bound the
+     *           oracle enforces on `vetoUnderpriced` / `vetoOverpriced`.
+     *
+     *      Why (1) exists: the bot's final settlement quote is submitted with
+     *      `expiryBlock = E + G` (G = settlement window, ~60 blocks) so a late
+     *      transaction can still be included instead of reverting. Its quote window
+     *      therefore stays open for the whole settlement window, which would otherwise
+     *      let traders open positions — and veto the round's settlement price — through
+     *      this wrapper after the round had already ended.
+     *
+     *      Cost: `m` is already loaded by the callers (they read `m.baseToken` for the
+     *      existence check and `m.feeBps` immediately after), and every Market field
+     *      packs into one slot, so this gate adds no SLOAD beyond fields already read.
+     */
     function _checkTradeable(Market storage m, uint256 quoteId)
         internal
         view
@@ -248,6 +269,7 @@ contract IRMarket is ReentrancyGuard {
     {
         q = oracle.quotes(quoteId);
         if (q.baseToken != m.baseToken || q.quoteToken != m.quoteToken) revert QuotePairMismatch();
+        if (block.number > m.expiryBlock) revert MarketWindowExpired();
         if (q.status != IMonoracle.QuoteStatus.ACTIVE) revert QuoteNotActive();
         if (block.number > q.expiryBlock) revert QuoteWindowExpired();
     }
