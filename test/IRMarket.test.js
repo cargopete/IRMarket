@@ -278,6 +278,58 @@ describe("IRMarket — fee wrapper (D-11/D-16)", function () {
       .to.be.revertedWithCustomError(market, "QuoteWindowExpired");
   });
 
+  it("reverts trading a settlement quote past the market expiry (MarketWindowExpired)", async function () {
+    // The final settlement quote outlives the round: the bot gives it
+    // expiryBlock = E + G (G ≈ 60) so a late transaction can still be included.
+    // Its own quote window therefore stays open through the whole settlement
+    // window — the market window must still stop trading at E.
+    const e = BigInt(await currentBlock()) + 20n;
+    await market.createMarket(base.target, quote.target, mm.address, e, 100n); // market 2
+
+    // sanity: that long-window quote IS tradeable while the round is still live
+    await oracle.connect(provider).submitQuote(base.target, quote.target, 1n * E18, 100n * E18, e + 60n); // quote 1
+    await market.connect(trader).openLong(2, 1);
+
+    // the round's settlement quote, same shape as quote 1
+    await oracle.connect(provider).submitQuote(base.target, quote.target, 1n * E18, 100n * E18, e + 60n); // quote 2
+
+    const head = BigInt(await currentBlock());
+    await mineBlocks(Number(e - head) + 2); // the chain is now past the market expiry
+
+    // quote 2 is untouched and its OWN window has not expired yet — only the
+    // market window has, so MarketWindowExpired (not QuoteWindowExpired) must fire
+    const q = await oracle.quotes(2);
+    expect(q.status).to.equal(0); // ACTIVE
+    expect(q.expiryBlock).to.equal(e + 60n);
+    expect(await currentBlock()).to.be.lte(q.expiryBlock);
+
+    await expect(market.connect(trader).openLong(2, 2))
+      .to.be.revertedWithCustomError(market, "MarketWindowExpired");
+    await expect(market.connect(trader).openShort(2, 2))
+      .to.be.revertedWithCustomError(market, "MarketWindowExpired");
+  });
+
+  it("still trades at exactly the market expiry block (gate is strict >)", async function () {
+    const e = BigInt(await currentBlock()) + 20n;
+    await market.createMarket(base.target, quote.target, mm.address, e, 100n); // market 2
+    await oracle.connect(provider).submitQuote(base.target, quote.target, 1n * E18, 100n * E18, e); // quote 1, expiry == market expiry
+
+    // park the chain one block before E so the next transaction is mined exactly at E
+    const head = BigInt(await currentBlock());
+    await mineBlocks(Number(e - 1n - head));
+    expect(await currentBlock()).to.equal(e - 1n);
+
+    await market.connect(trader).openLong(2, 1); // mined at block.number == E -> allowed
+    expect(await currentBlock()).to.equal(e);
+    expect((await oracle.quotes(1)).status).to.equal(1); // VETOED_UNDERPRICED
+
+    // one block later the market gate fires — and it fires BEFORE the quote-status
+    // check, which would otherwise report the already-vetoed quote
+    await mineBlocks(1);
+    await expect(market.connect(trader).openShort(2, 1))
+      .to.be.revertedWithCustomError(market, "MarketWindowExpired");
+  });
+
   it("accepts feeBps=9999 (boundary)", async function () {
     await market.createMarket(base.target, quote.target, mm.address, expiry, 9999n);
     await oracle.connect(provider).submitQuote(base.target, quote.target, 1n * E18, 100n * E18, expiry);
