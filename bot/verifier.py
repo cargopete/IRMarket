@@ -7,10 +7,13 @@ Implements bot/prd.md FR-BOT-001..004 on the V0.9 Veto-Market design
     price (per-quote expiryBlock = the market's expiryBlock, D-13). Re-quote
     (restock) immediately whenever our quote is vetoed.
   - Settlement quote (FR-BOT-002): SETTLEMENT_QUOTE_LEAD_BLOCKS before expiry,
-    submit one final quote at the current fair price so it settles LAST as the
-    round mark (终价, D-06).
-  - Auto-settle (FR-BOT-003): after expiry, settle ALL ACTIVE quotes of the pair
-    oldest-first (final quote last = canonical price), then withdraw our funds.
+    read the fair price once and submit (a) a final TRADING quote (expiry E) and
+    (b) the final SETTLEMENT quote (expiry E + SETTLEMENT_WINDOW_BLOCKS). (b)
+    settles LAST as the round mark (终价, D-06); its wider expiry is what keeps a
+    delayed inclusion from reverting `ExpiryMustBeFuture` (dixia/IRMarket#22).
+  - Auto-settle (FR-BOT-003): inside the settlement window [E, E+G], settle ALL
+    ACTIVE trading quotes of the round oldest-first, once; after E+G settle the
+    settlement quote LAST (= canonical price), then withdraw our funds.
     Optionally create the next round's market and keep quoting (AUTO_CREATE_MARKET).
   - Veto watch (FR-BOT-004): detect vetoes on our quotes, withdraw the 2x
     other-side return, log provider P&L.
@@ -58,6 +61,15 @@ SETTLED_WITHDRAWN = 4
 # Upstream Monoracle caps the veto window; a quote whose expiry exceeds block + this reverts
 # `ExpiryTooFar`. Mirror ../monoracle Monoracle.sol (`MAX_VERIFICATION_SLOTS`).
 MAX_VERIFICATION_SLOTS = 12000
+# Adaptive loop period (plan §4.5). While ANY driven pair sits inside its near-expiry
+# band (E-10 .. E+3 blocks) the drivers poll every NEAR_EXPIRY_POLL_SECONDS instead of
+# QUOTE_INTERVAL_SECONDS: the final-quotes read fires at `lead` = 3 blocks (~0.93 s)
+# before E, and a 5 s loop would step over that window ~85% of the time. The band ends
+# at E+3 because inside the settlement window the only timed action (the late
+# settlement quote, gated at E+G-2) tolerates a 5 s granularity.
+NEAR_EXPIRY_LOOKBACK_BLOCKS = 10
+NEAR_EXPIRY_LOOKAHEAD_BLOCKS = 3
+NEAR_EXPIRY_POLL_SECONDS = 0.4
 # Fixed gas limits — Monad bills the gas LIMIT, not gas used (sc-tech-spec §7), so an
 # inflated limit burns MON on every single send. These are measured gasUsed plus
 # head-room, not round numbers pulled out of the air:
@@ -302,7 +314,7 @@ class PriceFeed:
 class MarketMakerBot:
     """Market maker for ONE pair. Chain resources come from a shared
     `BotContext`; pair-specific state (tokens, market id, own quotes, withdrawn
-    set, final-quote flag) stays on the instance so pairs never interfere.
+    set, settlement-quote id) stays on the instance so pairs never interfere.
 
     Backward compatible: with no args it reads the legacy single-pair env."""
 
@@ -329,11 +341,20 @@ class MarketMakerBot:
         self.expiry_hint = pair.expiry_block
 
         self.market_id = pair.market_id
-        # 30 = ~10 s of budget at ~330 ms blocks: the mark quote must be INCLUDED
-        # strictly before its own expiry, and the stage run measured delivery latencies
-        # of 3, 7 and 28 blocks on the same shape of tx — so the lead has to cover the
-        # observed distribution, not the median. dixia/IRMarket#22 carries the probes.
-        self.lead_blocks = int(os.getenv("SETTLEMENT_QUOTE_LEAD_BLOCKS", "30"))
+        # 3 = ~0.93 s of budget at ~310 ms blocks. `lead` controls price FRESHNESS
+        # only — the price is frozen at the decision block, and the safety net against
+        # a delayed inclusion is the settlement window below (the settlement quote may
+        # land anywhere in [E, E+G]), so the lead no longer has to cover the observed
+        # delivery distribution (3/7/28 blocks, dixia/IRMarket#22).
+        self.lead_blocks = int(os.getenv("SETTLEMENT_QUOTE_LEAD_BLOCKS", "3"))
+        # Settlement window G (blocks): the final settlement quote's expiryBlock is
+        # E + G, so a tx included any block in [E, E+G] is accepted — a delayed send
+        # can no longer revert `ExpiryMustBeFuture`. Default 60 ≈ 18.6 s covers the
+        # observed inclusion outliers (28 blocks) plus an RPC hiccup and one retry
+        # cycle. G delays only the confirmation and the provider's collateral return:
+        # the final TRADING quote (expiry E) settles ~1 block after E and already
+        # carries the round mark.
+        self.settlement_window_blocks = int(os.getenv("SETTLEMENT_WINDOW_BLOCKS", "60"))
         self.round_blocks = int(os.getenv("ROUND_BLOCKS", "6000"))  # ~30 min @300ms
         self.auto_create = os.getenv("AUTO_CREATE_MARKET", "1") == "1"
         # Demo: re-quote every loop (even with an active quote) so the canonical price
@@ -346,12 +367,27 @@ class MarketMakerBot:
         self.gas_price_cap = int(os.getenv("GAS_PRICE_CAP_WEI", "0"))  # 0 = use chain
 
         self._nonce = None  # property → the shared BotContext nonce cursor
-        self._final_submitted = False
+        # Id of THIS round's final settlement quote (expiry E + settlement_window_blocks),
+        # or None while it has not been submitted. Replaces the old boolean
+        # `_final_submitted`: `is None` is the "not submitted yet" gate (step, restart
+        # recovery) and the id itself is the handle `settle_settlement_quote` needs.
+        self._settlement_quote_id: Optional[int] = None
+        # The trading-quote (expiry E) settle/withdraw pass runs ONCE per round — the
+        # settlement window spans G blocks and the loop revisits it, and settling twice
+        # would burn gas (and re-log) for nothing. Reset by roll_round.
+        self._round_swept = False
+        # Head / expiry remembered by the last step(); the drivers derive their adaptive
+        # sleep from these, so a fast poll near expiry costs no extra RPC per loop.
+        self._last_head: Optional[int] = None
+        self._last_expiry: Optional[int] = None
         #
         # Bounded quote bookkeeping (replaces the old ever-growing `_own_quotes`):
         #
         #   _own_current  our own ids for the CURRENT round, status ACTIVE — drives the
         #                 restock decision and is cleared when the round rolls. ≤ a few.
+        #                 NEVER holds the E+G settlement quote (see submit_quote's
+        #                 `track_own` and the recover-scan): only settle_settlement_quote
+        #                 may touch it, and only after the settlement window.
         #   _pending_own  our own ids still owed an action (endpoint-reached: vetoed, or
         #                 settled but not yet withdrawn), ANY round. An entry is dropped
         #                 the moment its withdraw succeeds, so the set only ever holds
@@ -519,13 +555,23 @@ class MarketMakerBot:
             self._send(tok.functions.approve(self.oracle_addr, 2**256 - 1), GAS["approve"], "approve")
 
     def _rescan_own_quotes(self, round_expiry: int) -> None:
-        """Startup recovery: re-hydrate `_own_current` / `_pending_own` after a restart.
+        """Startup recovery: re-hydrate `_own_current` / `_pending_own` /
+        `_settlement_quote_id` after a restart.
 
         Scans the ledger BACKWARD (no `eth_getLogs` — the public RPC rejects wide ranges)
         and stops early: after 20 consecutive strangers or at the first quote whose
         expiry precedes the current round, because nothing older can be ours for this
         round either. Only called once per process — forward progress relies on the
         receipt id, not on rescanning.
+
+        The final settlement quote (expiry E + settlement_window_blocks) is the NEWEST
+        own quote of the round, so the backward scan meets it before the round's
+        E-quotes. It is classified on its own — `_settlement_quote_id`, never
+        `_own_current`/`_pending_own` — so the trading-quote pass can never settle it
+        early; only `settle_settlement_quote` may, and only after the window. It does
+        not disturb termination: its expiry is > round_expiry, so the early stop still
+        fires at the first quote of an older round, and the 20-strangers stop is
+        untouched (it is ours, so it resets that counter like any own quote).
 
         The oracle is shared across pairs/processes, so reads are filtered by our tokens;
         each instance never acts on another pair's quotes."""
@@ -538,6 +584,18 @@ class MarketMakerBot:
             if q["provider"].lower() == self.address.lower():
                 consecutive_strangers = 0
                 if q["baseToken"].lower() != self.base_token.lower() or q["quoteToken"].lower() != self.quote_token.lower():
+                    continue
+                if q["expiryBlock"] == round_expiry + self.settlement_window_blocks:
+                    # The final settlement quote. The scan is descending, so the first
+                    # match is the newest — keep that one and suppress re-submission.
+                    # (Assumes ROUND_BLOCKS != settlement_window_blocks, so the NEXT
+                    # round's trading quotes never expire at exactly E+G.)
+                    if self._settlement_quote_id is None:
+                        self._settlement_quote_id = qid
+                        log.info(
+                            "[%s] recover-scan: settlement quote id=%s (expiry E+%s) — no re-submit",
+                            self.symbol, qid, self.settlement_window_blocks,
+                        )
                     continue
                 if q["status"] == ACTIVE:
                     self._own_current.add(qid)
@@ -567,7 +625,20 @@ class MarketMakerBot:
                 active = qid if active is None or qid > active else active
         return active
 
-    def submit_quote(self, expiry_block: int, label: str) -> int:
+    def submit_quote(
+        self,
+        expiry_block: int,
+        label: str,
+        fair: Optional[int] = None,
+        track_own: bool = True,
+    ) -> int:
+        """Submit one collateralized quote.
+
+        `fair` lets a caller price several quotes from ONE feed read: the final trading
+        quote and the settlement quote must carry the same price, so that a settlement
+        quote vetoed during the window leaves the canonical mark on an identical price.
+        `track_own=False` keeps the id out of `_own_current` — used for the E+G
+        settlement quote, which only `settle_settlement_quote` may act on."""
         decision_ts = time.time()  # checkpoint 0: head read (for the [latency] line)
         block = self.w3.eth.block_number
         max_expiry = block + MAX_VERIFICATION_SLOTS
@@ -576,7 +647,8 @@ class MarketMakerBot:
                 f"[{self.symbol}] expiry {expiry_block} > block+{MAX_VERIFICATION_SLOTS} "
                 f"({max_expiry}); upstream Monoracle would revert ExpiryTooFar"
             )
-        fair = self.feed.get(block)
+        if fair is None:
+            fair = self.feed.get(block)
         quote_amount = self.quote_base * fair // E18
         qid_before = self.oracle.functions.nextQuoteId().call()
         receipt = self._send(
@@ -599,7 +671,8 @@ class MarketMakerBot:
         # fresh read; only the fallback path can misfire, and it only everundershoots —
         # so the correction walks FORWARD, at most 3 ids.
         qid = self._resolve_own_quote(candidate, expiry_block)
-        self._own_current.add(qid)
+        if track_own:
+            self._own_current.add(qid)
         log.info(
             "[%s] quoted id=%s base=%s quote=%s price=%s (fair=%s)",
             self.symbol, qid, self.quote_base / E18, quote_amount / E18,
@@ -713,7 +786,10 @@ class MarketMakerBot:
             older round is NOT settled late (a late settle rewrites
             `latestValidQuoteId`, i.e. it would rewind the mark) — it is left for whoever
             settles it permissionlessly, as before.
-        """
+
+        The same filter excludes THIS round's final settlement quote (expiry E+G ≠ E),
+        and it is never in the id sets either — `settle_settlement_quote` owns it and
+        runs it after this pass, LAST, so it is the canonical mark."""
         settled_ids = []
         decision_block = self.w3.eth.block_number  # single head read for every send below
         decision_ts = time.time()
@@ -753,6 +829,60 @@ class MarketMakerBot:
             self.symbol, price[0], len(settled_ids),
         )
 
+    def settle_settlement_quote(self, round_expiry: int) -> None:
+        """Settle THIS round's final settlement quote (expiry E+G) — the sibling of
+        `settle_round`, and it MUST run after it: `latestValidQuoteId` is last-write-
+        wins, so the settlement quote settles LAST and its price is the canonical mark.
+
+        Called only from the finalize phase (head > E+G). Fresh read first — every
+        branch gates a send — and a single head read is shared by both sends, exactly
+        like `settle_round`. Branches:
+          * ACTIVE, window closed → settle, then withdraw in the same pass.
+          * VETOED_* → withdraw only: the canonical mark falls back to the final
+            trading quote, which carries the same price (same feed read at E-lead).
+            Logged loudly (plan §11 risk 1).
+          * SETTLED_VALID → withdraw only (crash between the settle and its withdraw).
+          * anything else (already withdrawn, or ACTIVE with the window still open) →
+            no send; the id is dropped so a later round starts clean.
+        """
+        qid = self._settlement_quote_id
+        if qid is None:
+            return  # never submitted (or already handled) — nothing owed
+        window_end = round_expiry + self.settlement_window_blocks
+        decision_block = self.w3.eth.block_number  # single head read for every send below
+        decision_ts = time.time()
+        q = self._quote(qid)  # fresh read: every branch here gates a send
+        if q["status"] == ACTIVE and decision_block <= window_end:
+            return  # window still open — settling now would revert; retry next step
+        if q["status"] == ACTIVE:
+            self._send(
+                self.oracle.functions.settleValidQuote(qid), GAS["settle"], f"settle q{qid} (settlement quote)",
+                decision_block=decision_block, decision_ts=decision_ts,
+            )
+            self._send(
+                self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}",
+                decision_block=decision_block, decision_ts=decision_ts,
+            )
+        elif q["status"] in (SETTLED_VALID, VETOED_UNDERPRICED, VETOED_OVERPRICED):
+            if q["status"] != SETTLED_VALID:
+                log.warning(
+                    "[%s] settlement quote q%s VETOED — canonical mark falls back to the final trading quote",
+                    self.symbol, qid,
+                )
+            self._send(
+                self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}",
+                decision_block=decision_block, decision_ts=decision_ts,
+            )
+        else:
+            return  # already withdrawn — nothing to send
+        self._own_current.discard(qid)
+        self._pending_own.discard(qid)
+        self._settlement_quote_id = None
+        price = self.oracle.functions.getLatestPrice(self.base_token, self.quote_token).call()
+        log.info(
+            "[%s] settlement quote q%s closed: canonical price=%s", self.symbol, qid, price[0],
+        )
+
     def roll_round(self, current_expiry: int) -> int:
         """Create the next round's market (bot as marketMaker) and continue quoting."""
         if not self.auto_create:
@@ -782,7 +912,10 @@ class MarketMakerBot:
             self.symbol, mid, new_expiry, current_expiry, mid,
         )
         self.market_id = mid
-        self._final_submitted = False
+        # Per-round state reset for the new round: the settlement quote id and the
+        # E-quote sweep flag belong to the round that just closed.
+        self._settlement_quote_id = None
+        self._round_swept = False
         return mid
 
     def _market_created_id(self, receipt) -> Optional[int]:
@@ -806,6 +939,26 @@ class MarketMakerBot:
         """One iteration of the quoting loop for THIS pair (no sleep). Split out
         from `run` so the multi-pair driver can advance every pair in turn.
 
+        Three phases, keyed off the market expiry E and the settlement window G
+        (plan §3):
+          NORMAL            head < E           veto watch; restock (expiry E) while
+                                                E-head > lead; at E-head <= lead read
+                                                the price ONCE and submit the final
+                                                trading quote (expiry E, only if no
+                                                active one) plus the final settlement
+                                                quote (expiry E+G). No restock after.
+          SETTLEMENT WINDOW E <= head <= E+G   veto watch; settle/withdraw the round's
+                                                E-quotes ONCE (only once head > E —
+                                                settling at head == E reverts
+                                                VerificationWindowActive); late-submit the
+                                                settlement quote if it was never sent and
+                                                the window is not about to close. No
+                                                restock with expiry E (it would revert
+                                                ExpiryMustBeFuture), no roll.
+          FINALIZE          head > E+G         E-quote pass if not yet done, then settle
+                                                the E+G quote LAST (canonical mark),
+                                                withdraw it, roll the next round.
+
         No per-step rescan: forward progress is driven by the receipt id
         (`_resolve_own_quote` verifies it once per submit); the bounded recover-scan runs
         exactly once per process, on the first step."""
@@ -816,6 +969,10 @@ class MarketMakerBot:
         if base_t.lower() != self.base_token.lower() or quote_t.lower() != self.quote_token.lower():
             raise RuntimeError(f"[{self.symbol}] market {self.market_id} pair mismatch")
         block = self.w3.eth.block_number
+        # Remembered for the drivers' adaptive loop period — a fast poll near expiry
+        # must not cost an extra RPC per loop.
+        self._last_head = block
+        self._last_expiry = expiry
 
         if not self._booted:
             self._rescan_own_quotes(expiry)
@@ -827,27 +984,68 @@ class MarketMakerBot:
 
         log.debug("[%s] block=%s expiry=%s (%s left)", self.symbol, block, expiry, expiry - block)
 
-        if block > expiry:
-            # Stale marketId (e.g. after a restart mid/late round): settle the old
-            # round's quotes and roll to a fresh one instead of crashing.
-            self.settle_round(expiry)
-            self.roll_round(expiry)
-            self._own_current.clear()
-            return
+        window_end = expiry + self.settlement_window_blocks
 
-        # veto watch + restock
-        self.watch_vetoes()
-        active = self._active_own_quote(expiry)
+        if block >= expiry:
+            # ---- settlement window / finalize ----------------------------------------
+            # NOTE: `>=` is deliberate — at head == E a restock with expiry E would
+            # revert ExpiryMustBeFuture, so the boundary belongs to the window phase.
+            # This also covers a stale marketId after a restart mid/late round: the
+            # round's quotes are settled and a fresh market is rolled instead of crashing.
+            self.watch_vetoes()
+            # The sweep needs head > E: settleValidQuote reverts VerificationWindowActive
+            # while block.number <= expiryBlock, and Monad bills the gas LIMIT of a
+            # reverted tx. At head == E this step therefore only watches vetoes (and may
+            # late-submit); the sweep runs on the next step, one block later.
+            if not self._round_swept and block > expiry:
+                self.settle_round(expiry)
+                self._round_swept = True
+            if block > window_end:
+                self.settle_settlement_quote(expiry)  # LAST settle = canonical mark
+                self.roll_round(expiry)
+                self._own_current.clear()
+                return
+            if self._settlement_quote_id is None and block < window_end - 2:
+                # Restart / missed step inside the window: submit the settlement quote
+                # now (the -2 keeps its inclusion inside the window even if this send
+                # is slow). The E-quotes are already settled, so it still settles last.
+                self._settlement_quote_id = self.submit_quote(
+                    window_end, "final settlement quote (late)"
+                )
+        else:
+            # ---- normal quoting (head < E) -------------------------------------------
+            self.watch_vetoes()
+            active = self._active_own_quote(expiry)
 
-        if expiry - block <= self.lead_blocks and not self._final_submitted:
-            # final settlement quote = mark (D-06/FR-BOT-002)
-            self.submit_quote(expiry, "final settlement quote")
-            self._final_submitted = True
-        elif active is None or self.requote:
-            self.submit_quote(expiry, "restock quote")
+            if expiry - block <= self.lead_blocks and self._settlement_quote_id is None:
+                # Final quotes (D-06/FR-BOT-002): ONE feed read prices both, so a
+                # settlement quote vetoed during the window falls back to an identical
+                # canonical price. The settlement quote's expiry is E+G, so a delayed
+                # inclusion can no longer revert ExpiryMustBeFuture (#22).
+                fair = self.feed.get(block)
+                if active is None:
+                    self.submit_quote(expiry, "final trading quote", fair=fair)
+                self._settlement_quote_id = self.submit_quote(
+                    window_end, "final settlement quote", fair=fair, track_own=False
+                )
+            elif active is None or self.requote:
+                self.submit_quote(expiry, "restock quote")
 
         log.debug(
             "[%s] step: %s quote reads", self.symbol, self._read_count,
+        )
+
+    def _near_expiry(self) -> bool:
+        """True while the head remembered by the last step() sits inside this pair's
+        near-expiry band (E-10 .. E+3). The drivers use it to shorten their sleep so
+        the final-quotes read (lead = 3 blocks ≈ 0.93 s) is not stepped over. Reads
+        only values step() already fetched — zero extra RPC per loop."""
+        if self._last_head is None or self._last_expiry is None:
+            return False
+        return (
+            self._last_expiry - NEAR_EXPIRY_LOOKBACK_BLOCKS
+            <= self._last_head
+            <= self._last_expiry + NEAR_EXPIRY_LOOKAHEAD_BLOCKS
         )
 
     def run(self, once: bool = False) -> None:
@@ -861,13 +1059,17 @@ class MarketMakerBot:
                 log.warning("[%s] step failed (will retry): %s", self.symbol, e)
             if once:
                 return
-            time.sleep(self.poll_seconds)
+            time.sleep(NEAR_EXPIRY_POLL_SECONDS if self._near_expiry() else self.poll_seconds)
 
 
 def run_all(bots: list[MarketMakerBot], once: bool = False) -> None:
     """Multi-pair driver: approve once per pair, then advance every pair one step
     per loop. Sends are serial (blocking receipts) and share the wallet nonce, so
-    pairs cannot race each other. Per-pair failures are logged and retried."""
+    pairs cannot race each other. Per-pair failures are logged and retried.
+
+    The loop period is adaptive: while ANY driven pair is inside its near-expiry
+    band the sleep shortens, because one pair's near-expiry read must not wait for
+    another pair's 5 s poll."""
     for b in bots:
         b.ensure_approvals()
     while True:
@@ -878,7 +1080,8 @@ def run_all(bots: list[MarketMakerBot], once: bool = False) -> None:
                 log.warning("[%s] step failed (will retry): %s", b.symbol, e)
         if once:
             return
-        time.sleep(bots[0].poll_seconds)
+        hot = any(b._near_expiry() for b in bots)
+        time.sleep(NEAR_EXPIRY_POLL_SECONDS if hot else bots[0].poll_seconds)
 
 
 def main() -> None:
