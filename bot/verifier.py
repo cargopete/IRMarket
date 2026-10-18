@@ -392,8 +392,25 @@ class MarketMakerBot:
             return self.gas_price_cap
         return price
 
-    def _send(self, fn: Any, gas: int, label: str) -> Any:
-        """Sign + send a tx with manual nonce tracking; retry on nonce races."""
+    def _send(
+        self,
+        fn: Any,
+        gas: int,
+        label: str,
+        decision_block: Optional[int] = None,
+        decision_ts: Optional[float] = None,
+    ) -> Any:
+        """Sign + send a tx with manual nonce tracking; retry on nonce races.
+
+        Emits one DEBUG `[latency]` line per attempt with the three checkpoints the
+        delivery-latency probe needs:
+          - decision: the head read (`decision_block`) + wall clock used to decide
+          - sent:     wall clock, and the head, right after send_raw_transaction returns
+          - receipt:  wall clock + the block that actually included the tx
+
+        `dt_send_s` isolates the bot's own processing from the network's inclusion
+        delay (`post_send_gap_blocks`); `incl_gap_blocks` is the sum of the two.
+        """
         for _ in range(5):
             if self._nonce is None:
                 self._sync_nonce()
@@ -408,13 +425,58 @@ class MarketMakerBot:
                     self._sync_nonce()
                     continue
                 raise
+            t_sent = time.time()
+            try:
+                head_at_send = self.w3.eth.block_number
+            except Exception:
+                head_at_send = None
             receipt = self.w3.eth.wait_for_transaction_receipt(h, timeout=120)
+            t_recv = time.time()
+            self._log_latency(
+                label, h.hex(), decision_block, decision_ts, head_at_send, t_sent, receipt, t_recv
+            )
             if receipt.status != 1:
+                # A mined-but-reverted tx still consumed the account nonce. Advance the
+                # cursor so the next send does not reuse it (that would pay for a second
+                # failed attempt before the nonce-race recovery kicks in).
+                self._nonce += 1
                 raise RuntimeError(f"{label}: tx reverted {h.hex()}")
             self._nonce += 1
             log.info("%s ok (gas %s) %s", label, receipt.gasUsed, h.hex())
             return receipt
         raise RuntimeError(f"{label}: nonce sync exhausted")
+
+    def _log_latency(
+        self,
+        label: str,
+        tx_hash: str,
+        decision_block: Optional[int],
+        decision_ts: Optional[float],
+        head_at_send: Optional[int],
+        t_sent: float,
+        receipt: Any,
+        t_recv: float,
+    ) -> None:
+        """One greppable DEBUG `[latency] ...` line per send (inclusion-delay probe)."""
+        recv_block = receipt["blockNumber"]
+        parts = [
+            f"label={label!r}",
+            f"tx={tx_hash}",
+            f"decision_block={decision_block}",
+            f"decision_ts={decision_ts:.3f}" if decision_ts is not None else "decision_ts=?",
+            f"sent_ts={t_sent:.3f}",
+            f"head_at_send={head_at_send}",
+            f"receipt_block={recv_block}",
+            f"receipt_ts={t_recv:.3f}",
+        ]
+        if decision_ts is not None:
+            parts.append(f"dt_send_s={t_sent - decision_ts:.3f}")
+        if decision_block is not None and recv_block is not None:
+            parts.append(f"incl_gap_blocks={recv_block - decision_block}")
+        if head_at_send is not None and recv_block is not None:
+            parts.append(f"post_send_gap_blocks={recv_block - head_at_send}")
+        parts.append(f"wait_s={t_recv - t_sent:.3f}")
+        log.debug("[latency] %s", " ".join(parts))
 
     def _market(self) -> tuple:
         return self.market.functions.markets(self.market_id).call()
@@ -506,6 +568,7 @@ class MarketMakerBot:
         return active
 
     def submit_quote(self, expiry_block: int, label: str) -> int:
+        decision_ts = time.time()  # checkpoint 0: head read (for the [latency] line)
         block = self.w3.eth.block_number
         max_expiry = block + MAX_VERIFICATION_SLOTS
         if expiry_block > max_expiry:
@@ -522,6 +585,8 @@ class MarketMakerBot:
             ),
             GAS["submit_quote"],
             label,
+            decision_block=block,
+            decision_ts=decision_ts,
         )
         # Parse the event from logs emitted by the oracle only (avoids web3's
         # "MismatchedABI" warnings for ERC20 Transfer logs in the same tx).
@@ -595,13 +660,18 @@ class MarketMakerBot:
         growing with round history. Also withdraws a SETTLED_VALID id whose withdraw
         didn't land when it was settled — a pure cleanup, because withdrawing does not
         touch `latestValidQuoteId`, so it cannot rewind the canonical mark."""
+        decision_block = self.w3.eth.block_number  # single head read for every send below
+        decision_ts = time.time()
         for qid in sorted(self._own_current | self._pending_own):
             q = self._quote(qid)  # fresh read: this gates a send
             if q["status"] == SETTLED_VALID:
                 # a settle that landed without its withdraw (crash, RPC blip) — a pure
                 # cleanup: withdrawing never touches `latestValidQuoteId`, so this cannot
                 # rewind the canonical mark.
-                self._send(self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}")
+                self._send(
+                    self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}",
+                    decision_block=decision_block, decision_ts=decision_ts,
+                )
                 self._own_current.discard(qid)
                 self._pending_own.discard(qid)
                 log.info("[%s] cleanup: settled-but-unwithdrawn q%s recovered", self.symbol, qid)
@@ -609,7 +679,7 @@ class MarketMakerBot:
             if q["status"] not in (VETOED_UNDERPRICED, VETOED_OVERPRICED):
                 continue
             base_amt, quote_amt = q["baseAmount"], q["quoteAmount"]
-            fair = self.feed.get(self.w3.eth.block_number)
+            fair = self.feed.get(decision_block)
             if q["status"] == VETOED_UNDERPRICED:
                 # we keep 2x quote, lose base
                 pnl_hkd = quote_amt - base_amt * fair // E18
@@ -618,7 +688,10 @@ class MarketMakerBot:
                 # we keep 2x base, lose quote
                 pnl_hkd = base_amt * fair // E18 - quote_amt
                 side = "OVERPRICED (trader went SHORT)"
-            self._send(self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}")
+            self._send(
+                self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}",
+                decision_block=decision_block, decision_ts=decision_ts,
+            )
             self._own_current.discard(qid)
             self._pending_own.discard(qid)
             log.warning(
@@ -642,6 +715,8 @@ class MarketMakerBot:
             settles it permissionlessly, as before.
         """
         settled_ids = []
+        decision_block = self.w3.eth.block_number  # single head read for every send below
+        decision_ts = time.time()
         for qid in sorted(self._own_current | self._pending_own):
             q = self._quote(qid)  # fresh read: every branch here gates a send
             if q["expiryBlock"] != round_expiry:
@@ -652,15 +727,24 @@ class MarketMakerBot:
                 # leftovers of older rounds.
                 continue
             if q["status"] == ACTIVE:
-                self._send(self.oracle.functions.settleValidQuote(qid), GAS["settle"], f"settle q{qid}")
+                self._send(
+                    self.oracle.functions.settleValidQuote(qid), GAS["settle"], f"settle q{qid}",
+                    decision_block=decision_block, decision_ts=decision_ts,
+                )
                 settled_ids.append(qid)
                 # the settle just made it withdrawable — withdraw in the same pass rather
                 # than re-reading, but keep the id in the sets until BOTH sends succeeded:
                 # if the withdraw tx fails, the next step's own settle_round (id still
                 # stored) runs the elif branch, so no escrow is ever stranded.
-                self._send(self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}")
+                self._send(
+                    self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}",
+                    decision_block=decision_block, decision_ts=decision_ts,
+                )
             elif q["status"] in (SETTLED_VALID, VETOED_UNDERPRICED, VETOED_OVERPRICED):
-                self._send(self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}")
+                self._send(
+                    self.oracle.functions.withdrawProviderFunds(qid), GAS["withdraw"], f"withdraw q{qid}",
+                    decision_block=decision_block, decision_ts=decision_ts,
+                )
             self._own_current.discard(qid)
             self._pending_own.discard(qid)
         price = self.oracle.functions.getLatestPrice(self.base_token, self.quote_token).call()
@@ -677,6 +761,7 @@ class MarketMakerBot:
                 self.symbol, self.market_id,
             )
             return self.market_id
+        decision_ts = time.time()  # checkpoint 0: head read (for the [latency] line)
         block = self.w3.eth.block_number
         new_expiry = block + self.round_blocks
         fee_bps = int(os.getenv("FEE_BPS", "100"))
@@ -686,6 +771,8 @@ class MarketMakerBot:
             ),
             GAS["create_market"],
             "createMarket (next round)",
+            decision_block=block,
+            decision_ts=decision_ts,
         )
         mid = self._market_created_id(receipt)
         if mid is None:
@@ -800,6 +887,12 @@ def main() -> None:
     logging.basicConfig(
         level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+    # LOG_LEVEL=DEBUG exists for the `[latency]` / `step: N quote reads` probes. The
+    # transport loggers are far chattier than the bot itself, so keep them quiet —
+    # otherwise one RPC call costs a dozen lines and the log is unusable.
+    if os.getenv("LOG_LEVEL", "INFO").upper() == "DEBUG":
+        for noisy in ("web3", "urllib3"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
     shared, pairs = resolve_pairs()
     context = BotContext(shared)
     bots = [MarketMakerBot(pair=p, context=context) for p in pairs]
