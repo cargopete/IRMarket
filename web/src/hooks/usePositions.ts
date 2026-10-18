@@ -7,15 +7,13 @@ import type { AbiEvent } from "viem";
 import { MONORACLE_ABI } from "@/lib/abis/oracle";
 import { decodeQuote } from "@/lib/decode";
 import { IRMARKET_ABI } from "@/lib/abis/market";
+import { getLogsChunked } from "@/lib/logs";
 import { useCurrentBlock } from "./useCurrentBlock";
 import { MARKET_ADDRESS, ORACLE_ADDRESS, QUOTE_TOKEN, hasWrapper, isFullyConfigured } from "@/lib/config";
 import type { Position, Side } from "@/lib/types";
 
 const SIDE_LABEL: Record<number, Side> = { 0: "bull", 1: "bear" };
 
-// Monad testnet RPCs cap eth_getLogs at a ~100-block range, so event history must be
-// fetched in chunked windows (verified: "eth_getLogs is limited to a 100 range").
-const LOG_CHUNK_BLOCKS = 100n;
 // Look back ~5000 blocks (~25 min @300ms) for the user's position events. The bot rolls
 // ~600-block rounds, so this covers several rounds without an expensive full scan.
 const LOOKBACK_BLOCKS = 5000n;
@@ -23,12 +21,6 @@ const LOOKBACK_BLOCKS = 5000n;
 const VETO_WRAPPED_EVENT = IRMARKET_ABI.find(
   (e): e is Extract<(typeof IRMARKET_ABI)[number], { type: "event" }> => e.type === "event" && e.name === "VetoWrapped",
 ) as AbiEvent;
-
-interface RawLog {
-  data: `0x${string}`;
-  topics: `0x${string}`[];
-  blockNumber: bigint;
-}
 
 async function readQuote(
   publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
@@ -57,37 +49,6 @@ async function readQuote(
     expiryBlock: BigInt(q.expiryBlock),
     settledSlot: BigInt(q.settledSlot),
   };
-}
-
-/** eth_getLogs helper that paginates in ≤100-block chunks to satisfy RPC range limits. */
-async function getLogsChunked(
-  publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
-  params: { address: Address; event?: AbiEvent; args?: Record<string, unknown>; fromBlock: bigint; toBlock: bigint },
-): Promise<RawLog[]> {
-  const ranges: Array<{ from: bigint; to: bigint }> = [];
-  let from = params.fromBlock;
-  while (from <= params.toBlock) {
-    const to = from + LOG_CHUNK_BLOCKS - 1n > params.toBlock ? params.toBlock : from + LOG_CHUNK_BLOCKS - 1n;
-    ranges.push({ from, to });
-    from = to + 1n;
-  }
-
-  // Fetch chunks in small concurrency batches so a throttling RPC doesn't reject them all.
-  const results = await Promise.all(
-    ranges.map(({ from: f, to: t }) =>
-      publicClient
-        .getLogs({
-          address: params.address,
-          event: params.event,
-          args: params.args,
-          fromBlock: f,
-          toBlock: t,
-        })
-        .then((logs) => logs.map((l) => ({ data: l.data, topics: l.topics as `0x${string}`[], blockNumber: BigInt(l.blockNumber) })))
-        .catch(() => [] as RawLog[]),
-    ),
-  );
-  return results.flat();
 }
 
 /**
