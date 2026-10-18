@@ -62,12 +62,16 @@ SETTLED_WITHDRAWN = 4
 # `ExpiryTooFar`. Mirror ../monoracle Monoracle.sol (`MAX_VERIFICATION_SLOTS`).
 MAX_VERIFICATION_SLOTS = 12000
 # Adaptive loop period (plan §4.5). While ANY driven pair sits inside its near-expiry
-# band (E-10 .. E+3 blocks) the drivers poll every NEAR_EXPIRY_POLL_SECONDS instead of
+# band (E-LOOKBACK .. E+3 blocks) the drivers poll every NEAR_EXPIRY_POLL_SECONDS instead of
 # QUOTE_INTERVAL_SECONDS: the final-quotes read fires at `lead` = 3 blocks (~0.93 s)
 # before E, and a 5 s loop would step over that window ~85% of the time. The band ends
 # at E+3 because inside the settlement window the only timed action (the late
 # settlement quote, gated at E+G-2) tolerates a 5 s granularity.
-NEAR_EXPIRY_LOOKBACK_BLOCKS = 10
+# LOOKBACK must exceed ONE FULL LOOP PERIOD in blocks, or the bot can step straight
+# over the band and miss the at-lead submission: measured on the AWS box the loop
+# period is ~13-20 s (QuickNode serves ~1.5 s per RPC call, and a step makes 5-10
+# calls), i.e. 42-65 blocks - hence 65, not a small constant.
+NEAR_EXPIRY_LOOKBACK_BLOCKS = 65
 NEAR_EXPIRY_LOOKAHEAD_BLOCKS = 3
 NEAR_EXPIRY_POLL_SECONDS = 0.4
 # Fixed gas limits — Monad bills the gas LIMIT, not gas used (sc-tech-spec §7), so an
