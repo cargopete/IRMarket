@@ -28,7 +28,7 @@ _Tracking convention: this file is only an index — each item references a GH i
 
 - GH: https://github.com/dixia/IRMarket/issues/13
 - Spec: `docs/design/bot-real-price-feed-spec.md` (in the `IRMarket-pricefeed` worktree)
-- Status: **TODO** — changes uncommitted in that worktree; commit + merge pending.
+- Status: **DONE (branch level)** — the real-feed work is committed on `feat/real-price-feed` and now merged with `main` (settlement window E+G, wrapper trade gate, bounded bookkeeping and the `[latency]` instrumentation preserved; the inline synthetic `PriceFeed` class replaced by `bot/price_feed.py`). Hardhat 64/64. Pushed; promotion to `main` awaits review.
 
 ## Pilot Envio HyperIndex/HyperSync for web + bot on-chain data layer
 
