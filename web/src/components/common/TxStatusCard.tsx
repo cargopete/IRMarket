@@ -35,6 +35,7 @@ export function mapTransactionError(err: unknown): string {
     [/NotWithdrawable/, "Collateral can't be withdrawn yet"],
     // IRMarket wrapper errors
     [/MarketDoesNotExist/, "Market not found — please refresh and retry"],
+    [/MarketWindowExpired/, "This round's trading window has closed — the next round starts shortly"],
     [/QuotePairMismatch/, "Quote doesn't match this market's assets — please select the latest quote"],
     [/FeeTooHigh/, "Fee rate is invalid"],
     [/InvalidToken/, "Invalid token address"],

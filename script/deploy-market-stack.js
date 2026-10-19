@@ -22,6 +22,8 @@
  *   $env:ORACLE_ADDRESS  = "<upstream oracle>"          # REQUIRED; exit 1 if missing
  *   $env:PRIVATE_KEY     = "<funded deployer>"          # required for a real run
  *   node script/deploy-market-stack.js [ --dry-run ]    # --dry-run: checks + plan, zero txs
+ *   --fresh-wrapper (FRESH_WRAPPER=1)                   # deploy a new wrapper even when the
+ *                                                       # registry's wrapper binds this oracle
  *   FRESH_TOKENS=1 / --fresh-tokens                     # force-deploy brand-new tokens
  * Writes deployment.json / deployment-assets.json / deployment-vault.json.
  */
@@ -30,12 +32,18 @@ import { ethers } from "ethers";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { shouldReuseWrapper, shouldReuseVault } from "./stack-reuse.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 
 const DRY_RUN = process.argv.includes("--dry-run");
 const FRESH_TOKENS = process.env.FRESH_TOKENS === "1" || process.argv.includes("--fresh-tokens");
+// --fresh-wrapper (FRESH_WRAPPER=1): force a brand-new wrapper even when the registry's
+// wrapper binds the same oracle. Without it a same-oracle re-run silently KEEPS the
+// old wrapper — which is how the wrapper gate (issue #22) ended up "not on chain"
+// while main carried it. Tokens and the vault still reuse normally.
+const FRESH_WRAPPER = process.env.FRESH_WRAPPER === "1" || process.argv.includes("--fresh-wrapper");
 const RPC_URL = process.env.RPC_URL || "https://testnet-rpc.monad.xyz";
 const CHAIN_ID = Number(process.env.CHAIN_ID || 10143);
 const FEE_BPS = BigInt(process.env.FEE_BPS || "100");
@@ -139,19 +147,22 @@ async function main() {
   console.log(`RPC ${RPC_URL} chainId ${CHAIN_ID}`);
   console.log(`oracle  (consumed): ${oracleAddr}`);
   console.log(`assets: ${assets.map((a) => `${a.symbol}@${ethers.formatEther(a.fairPrice)}`).join(", ")}`);
-  console.log(`token mode: ${FRESH_TOKENS ? "FRESH (force new, FOR testing only)" : "reuse registry (mint top-ups, never redeploy)"}\n`);
+  console.log(`token mode: ${FRESH_TOKENS ? "FRESH (force new, FOR testing only)" : "reuse registry (mint top-ups, never redeploy)"}`);
+  console.log(`wrapper mode: ${FRESH_WRAPPER ? "FRESH (--fresh-wrapper: deploy new even if the registry's wrapper binds this oracle)" : "reuse if the registry's wrapper binds this oracle"}\n`);
 
   // reuse decisions
   const reuseQuote = !FRESH_TOKENS && registry?.quoteToken && ethers.isAddress(registry.quoteToken) ? registry.quoteToken : undefined;
   const bySymbol = new Map((registry?.assets || []).map((a) => [a.symbol, a]));
 
   // wrapper reuse: only if the existing wrapper is bound to this exact oracle
+  // (FRESH_WRAPPER=1 / --fresh-wrapper: deploy new, same-oracle rebuild — see header).
   let wrapperAddr;
-  if (registry?.market && ethers.isAddress(registry.market) && registry?.oracle === oracleAddr) {
+  if (registry?.market && ethers.isAddress(registry.market)) {
     const m = new ethers.Contract(registry.market, ["function oracle() view returns (address)"], provider);
-    try {
-      if ((await m.oracle()).toLowerCase() === oracleAddr.toLowerCase()) wrapperAddr = ethers.getAddress(registry.market);
-    } catch { /* market not an IRMarket with oracle() — deploy fresh */ }
+    const chainOracle = await m.oracle().catch(() => null);
+    if (shouldReuseWrapper(registry, chainOracle, oracleAddr, { freshWrapper: FRESH_WRAPPER })) {
+      wrapperAddr = ethers.getAddress(registry.market);
+    }
   }
   if (wrapperAddr) console.log(`[1/5] IRMarket wrapper: REUSE ${wrapperAddr}`);
   else console.log("[1/5] IRMarket wrapper: deploy new (oracle-bound at construction)");
@@ -287,17 +298,18 @@ async function main() {
       "function priceBase() view returns (address)",
       "function settlementToken() view returns (address)",
     ], provider);
-    try {
-      const [vo, pb, st] = await Promise.all([v.oracle(), v.priceBase(), v.settlementToken()]);
-      if (vo.toLowerCase() === oracleAddr.toLowerCase() && pb.toLowerCase() === first.baseToken.toLowerCase() && st.toLowerCase() === quote.address.toLowerCase()) {
-        vault = { address: ethers.getAddress(vaultRegistry.vault), abi: vaultArtifact.abi, txHash: vaultRegistry.txHashes?.vault };
-        vaultReused = true;
-        console.log(`\n[5/5] vault REUSE ${vault.address} (bindings match)`);
-      } else {
-        console.log(`\n[5/5] vault bindings mismatch on ${vaultRegistry.vault} → deploy new`);
-      }
-    } catch (e) {
-      console.log(`\n[5/5] vault ${vaultRegistry.vault} not an IRMarketVault (read failed) → deploy new`);
+    const bindings = {
+      vault: vaultRegistry.vault,
+      oracle: await v.oracle().catch(() => null),
+      priceBase: await v.priceBase().catch(() => null),
+      settlementToken: await v.settlementToken().catch(() => null),
+    };
+    if (shouldReuseVault(bindings, { oracle: oracleAddr, baseToken: first.baseToken, quoteToken: quote.address })) {
+      vault = { address: ethers.getAddress(vaultRegistry.vault), abi: vaultArtifact.abi, txHash: vaultRegistry.txHashes?.vault };
+      vaultReused = true;
+      console.log(`\n[5/5] vault REUSE ${vault.address} (bindings match)`);
+    } else {
+      console.log(`\n[5/5] vault ${vaultRegistry.vault} bindings mismatch / not an IRMarketVault → deploy new`);
     }
   }
   if (!vault) {

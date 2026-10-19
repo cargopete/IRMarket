@@ -15,6 +15,9 @@
  * Optional env:
  *   E2E_ASSET          stage asset to test (default: the registry's first asset)
  *   E2E_MARKET_ID      override the marketId (default: read from the stage registry)
+ *   E2E_PROTECTION_BYPASS  Vercel Deployment Protection "Bypass for Automation" secret —
+ *                      sent as x-vercel-protection-bypass on every request so the suite
+ *                      can run against an SSO-protected preview without disabling it.
  *
  * Run:
  *   cd web
@@ -51,6 +54,11 @@ if (!process.env.E2E_BURNER_KEY) {
   process.exit(1);
 }
 
+// Vercel Deployment Protection (SSO) bypass, when the preview is protected (optional).
+const BYPASS_HEADERS = process.env.E2E_PROTECTION_BYPASS
+  ? { "x-vercel-protection-bypass": process.env.E2E_PROTECTION_BYPASS }
+  : undefined;
+
 export default defineConfig({
   testDir: path.join(WEB_DIR, "tests", "e2e"),
   testMatch: /preview\.spec\.ts$/,
@@ -64,6 +72,7 @@ export default defineConfig({
   use: {
     baseURL: PREVIEW_URL,
     headless: true,
+    extraHTTPHeaders: BYPASS_HEADERS,
     launchOptions: {
       ...launchOptions,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
