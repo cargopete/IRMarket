@@ -54,20 +54,16 @@ if (!process.env.E2E_BURNER_KEY) {
   process.exit(1);
 }
 
-// Vercel Deployment Protection (SSO) bypass, when the preview is protected (optional).
-const BYPASS_HEADERS = process.env.E2E_PROTECTION_BYPASS
-  ? { "x-vercel-protection-bypass": process.env.E2E_PROTECTION_BYPASS }
-  : undefined;
+// Vercel SSO bypass is injected by preview.spec.ts (same-origin-only, see header note).
 
 export default defineConfig({
   testDir: path.join(WEB_DIR, "tests", "e2e"),
   testMatch: /preview\.spec\.ts$/,
   fullyParallel: false,
   workers: 1,
-  retries: 0,
   // Live-chain rounds are minutes long and every tx waits for a receipt: generous caps.
   timeout: 300_000,
-  // One retry: the preview sits behind Vercel Deployment Protection (SSO + edge), and a
+  // Retries: the preview sits behind Vercel Deployment Protection (SSO + edge), and a
   // navigation can be dropped by the edge (net::ERR_CONNECTION_CLOSED) with zero fault
   // of the app — retrying the test is the right response to an infra flake.
   retries: 2,
@@ -76,7 +72,6 @@ export default defineConfig({
   use: {
     baseURL: PREVIEW_URL,
     headless: true,
-    extraHTTPHeaders: BYPASS_HEADERS,
     launchOptions: {
       ...launchOptions,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
