@@ -19,18 +19,26 @@ export interface RawLog {
   blockNumber: bigint;
 }
 
+/**
+ * Inclusive [from,to] block windows covering [fromBlock,toBlock] in ≤chunk steps.
+ * `newestFirst` returns the windows in descending order (latest window first), which lets
+ * callers scan for the newest data and stop early.
+ */
+export function blockWindows(fromBlock: bigint, toBlock: bigint, chunk = LOG_CHUNK_BLOCKS, newestFirst = false) {
+  const windows: Array<{ from: bigint; to: bigint }> = [];
+  for (let from = fromBlock; from <= toBlock; from += chunk) {
+    const to = from + chunk - 1n > toBlock ? toBlock : from + chunk - 1n;
+    windows.push({ from, to });
+  }
+  return newestFirst ? windows.reverse() : windows;
+}
+
 /** eth_getLogs helper that paginates in ≤100-block chunks to satisfy RPC range limits. */
 export async function getLogsChunked(
   publicClient: PublicClientT,
   params: { address: Address; event?: AbiEvent; args?: Record<string, unknown>; fromBlock: bigint; toBlock: bigint },
 ): Promise<RawLog[]> {
-  const ranges: Array<{ from: bigint; to: bigint }> = [];
-  let from = params.fromBlock;
-  while (from <= params.toBlock) {
-    const to = from + LOG_CHUNK_BLOCKS - 1n > params.toBlock ? params.toBlock : from + LOG_CHUNK_BLOCKS - 1n;
-    ranges.push({ from, to });
-    from = to + 1n;
-  }
+  const ranges = blockWindows(params.fromBlock, params.toBlock);
 
   // Fetch in small batches with per-chunk retries: firing 50 getLogs at once trips
   // provider rate limits (429), and silently dropping one chunk silently hides whatever

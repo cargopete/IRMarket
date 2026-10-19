@@ -17,13 +17,20 @@ import type { Market, MarketWithMeta } from "@/lib/types";
 // full enumeration is O(all markets ever created) per poll — 165+ calls — and gets the
 // batch throttled by the RPC ("Market not found." flakes). The event carries every field
 // markets() returns (baseToken/quoteToken/marketMaker/expiryBlock/feeBps are emitted,
-// createdAtBlock = log block), so zero per-market reads are needed. History depth is the
-// lookback window (the bot rolls short rounds, so ~50 chunk requests cover several hours
-// of rounds — same budget usePositions is proven at).
+// createdAtBlock = log block), so zero per-market reads are needed.
+//
+// The window is bounded by the oracle's own expiry cap: a round is still tradable only
+// while expiryBlock > now, and upstream enforces expiryBlock <= created + MAX_VERIFICATION_
+// SLOTS (12,000), so ANY live round was created within the last 12,000 blocks. Scanning
+// 14,000 (≈2h @0.3 s) therefore always covers the tradable round plus ~20 rounds of
+// history for the /trade round picker, in ~15 chunked getLogs (3 batches) — one request
+// class per poll instead of the 42+ a naive full-window scan costs. An earlier 5,000-block
+// window hid a live 1 h round ("No markets yet" with an open market) — the window must
+// exceed the longest configured tenor.
 const MARKET_CREATED_EVENT = IRMARKET_ABI.find(
   (e): e is Extract<(typeof IRMARKET_ABI)[number], { type: "event" }> => e.type === "event" && e.name === "MarketCreated",
 ) as AbiEvent;
-const MARKET_LOOKBACK_BLOCKS = 5000n;
+const MARKET_LOOKBACK_BLOCKS = 14_000n;
 
 /** Markets: whitelist-filtered event scan when curated; legacy full enumeration otherwise. */
 export function useMarkets(): MarketWithMeta[] {
@@ -115,9 +122,8 @@ export function useMarkets(): MarketWithMeta[] {
           });
           if (decoded.eventName !== "MarketCreated") continue;
           const a = decoded.args as unknown as Record<string, unknown>;
-          const marketId = a.marketId as bigint;
           const market: Market = {
-            marketId,
+            marketId: a.marketId as bigint,
             baseToken: a.baseToken as `0x${string}`,
             quoteToken: a.quoteToken as `0x${string}`,
             marketMaker: a.marketMaker as `0x${string}`,
@@ -125,7 +131,7 @@ export function useMarkets(): MarketWithMeta[] {
             expiryBlock: a.expiryBlock as bigint,
             createdAtBlock: log.blockNumber,
           };
-          byId.set(marketId.toString(), market);
+          byId.set(market.marketId.toString(), market);
         } catch {
           continue;
         }

@@ -67,6 +67,10 @@ export default defineConfig({
   retries: 0,
   // Live-chain rounds are minutes long and every tx waits for a receipt: generous caps.
   timeout: 300_000,
+  // One retry: the preview sits behind Vercel Deployment Protection (SSO + edge), and a
+  // navigation can be dropped by the edge (net::ERR_CONNECTION_CLOSED) with zero fault
+  // of the app — retrying the test is the right response to an infra flake.
+  retries: 2,
   expect: { timeout: 45_000 },
 
   use: {

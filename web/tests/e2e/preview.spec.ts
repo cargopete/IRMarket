@@ -39,6 +39,20 @@ const WEB_DIR = path.resolve(import.meta.dirname!, "..", "..");
 const RPC = process.env.E2E_TESTNET_RPC as string;
 const KEY = process.env.E2E_BURNER_KEY as `0x${string}`;
 
+// Vercel Deployment Protection bypass — SAME-ORIGIN REQUESTS ONLY (see the config header
+// for why extraHTTPHeaders is forbidden here). E2E_PROTECTION_BYPASS is optional.
+const BYPASS = process.env.E2E_PROTECTION_BYPASS;
+const BASE = process.env.E2E_PREVIEW_URL as string;
+test.beforeEach(({ page }) => {
+  if (!BYPASS) return;
+  page.route("**/*", (route, request) => {
+    if (request.url().startsWith(BASE)) {
+      return route.continue({ headers: { ...request.headers(), "x-vercel-protection-bypass": BYPASS } });
+    }
+    return route.continue();
+  });
+});
+
 const stack = loadStageStack(WEB_DIR, { asset: process.env.E2E_ASSET });
 const burner = makeBurnerClients({ rpc: RPC, key: KEY, stack });
 
