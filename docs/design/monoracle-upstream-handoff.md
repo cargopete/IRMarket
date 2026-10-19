@@ -73,7 +73,7 @@ the production/fork bot.
 | Contract | Address |
 |---|---|
 | upstream oracle (A) | `0x807321100748d75a618e508de214123CB77C9f4D` (`VS=2`, `MAXVS=12000`) |
-| IRMarket wrapper | `0x39A14B5d0C049525C3C42dE57E6d4553B0df5C99` |
+| IRMarket wrapper | `0x3B08bd1CD96D6Ca0bB5897944ce948f1018D9dE1` (2026-10-19 redeploy: trade gate + right-sized gas; the pre-gate `0x39A14B5d…` stays on-chain, dormant) |
 | HKD quote | `0x36448Ef080ba5fa251e1a9bd61782786f9e24F04` |
 | NVDA base | `0xda9CF5A68cc2d8EFA5940db4094b6377D389DE17` |
 | GLM base | `0x35B3f6b418d4D78961636Ec59d52c64B0f04612c` |

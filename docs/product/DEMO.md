@@ -17,14 +17,14 @@
 
 ### 1. Environment
 
-Contracts (Monad testnet — **upstream (A) consumer stack**; `irmarket.xyz` still serves the legacy
-fork stack until the Production cutover; survey record:
+Contracts (Monad testnet — **upstream (A) consumer stack**; `irmarket.xyz` serves this stack since the
+2026-10-19 Production cutover; survey record:
 `docs/design/monoracle-version-survey.md`):
 
 | Contract | Address |
 |---|---|
 | Monoracle (upstream build, **consumed** — per-quote window D-13, `MAXVS=12000`) | `0x807321100748d75a618e508de214123CB77C9f4D` |
-| IRMarket (factory + 1% fee wrapper) | `0x39A14B5d0C049525C3C42dE57E6d4553B0df5C99` |
+| IRMarket (factory + 1% fee wrapper) | `0x3B08bd1CD96D6Ca0bB5897944ce948f1018D9dE1` |
 | NVDA (base token — of 4 curated assets incl. GLM/SNDK/DEEPSEEK) | `0xda9CF5A68cc2d8EFA5940db4094b6377D389DE17` |
 | HKD (quote token) | `0x36448Ef080ba5fa251e1a9bd61782786f9e24F04` |
 

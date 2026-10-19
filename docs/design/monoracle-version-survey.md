@@ -27,12 +27,14 @@ the fingerprint below and exits 1 on drift).
 | `0x151286e6Ca5F5CA20910dE90C0DCEAa9fd71f2c8` | `0x64527fccc4958fef…` | 15,292 | **A — bytecode-identical** to the consumed instance (upstream's own testnet deployment); NOT wired into IRMarket |
 | `0x1ABABc60Ca6950C94eA80F2f611AB06aAAAD28c0` | `0xfe7b43d4fcc544bb…` | 14,672 | A (older) |
 | `0xF92A55D4e22456C987b3e7AF2E3730b3f5022Ccb` | `0x5eb5e5eec254b9ef…` | 8,084 | A (older; monoracle bot's oracle) |
-| `0xb6523DA6f177dB25d766a27575624B3e1fe0a00e` | `0x09a950a8cd7480ac…` | 14,438 | **B — fork** (serves `irmarket.xyz` until the Production cutover) |
+| `0xb6523DA6f177dB25d766a27575624B3e1fe0a00e` | `0x09a950a8cd7480ac…` | 14,438 | **B — fork** (legacy; `irmarket.xyz` was cut over to the A stack on 2026-10-19, so this is retired) |
 
 Downstream bindings (all `oracle()` immutable at construction — oracle change = downstream
 redeploy, never re-point):
 
-- wrapper `0x39A14B5d0C049525C3C42dE57E6d4553B0df5C99` → `0x80732110…` (A)
+- wrapper `0x3B08bd1CD96D6Ca0bB5897944ce948f1018D9dE1` → `0x80732110…` (A) — deployed 2026-10-19 with the
+  `MarketWindowExpired` trade gate + right-sized gas limits (replaces the pre-gate wrapper `0x39A14B5d…`,
+  which stays on-chain but no longer receives rounds)
 - vault `0x95a74C58bbF1F8F56c02d27Aecc0024D98e67dD3` → `0x80732110…` (A), pair `(NVDA 0xda9CF5A6…, HKD 0x36448Ef0…)`
 - legacy prod: wrapper `0x03b181…` + vault `0xE4B88d…` → `0xb652…` (B)
 
