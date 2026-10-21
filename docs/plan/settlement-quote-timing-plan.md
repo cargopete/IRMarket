@@ -348,13 +348,53 @@ roll by `ROUND_BLOCKS / n_pairs`), not more batching.
 
 ## 10. Gas budget per round (at 102 gwei, measured)
 
+Monad bills the gas **limit**, not the gas used, so the limit table *is* the cost.
+The old limits carried 30–50 % head-room per operation, which the bot paid on every
+send. Re-measured 2026-10-21 against the production contracts (`eth_estimateGas` on
+the exact calldata) and against the local Hardhat gas test (which also covers the
+first-call state: a fresh allowance slot):
+
+| op | live cold | mock first | old limit | adopted | MON / send |
+|---|---|---|---|---|---|
+| approve | 33,586 | 47,242 | 60,000 | **56,691** | 0.0058 |
+| submit_quote | 287,219 | 262,844 | 400,000 | **315,413** | 0.0322 |
+| settle | 48,192 | 60,796 | 100,000 | **72,956** | 0.0074 |
+| withdraw | 123,206 | ~49,000 | 200,000 | **129,367** | 0.0132 |
+| create_market | 172,678 | 182,324 | 250,000 | **218,789** | 0.0223 |
+
+Adopted = max(live × 1.05, mock × 1.20). Two empirical lessons behind that:
+
+1. **The exact measured value is not safe.** A test run with the limits set to the
+   live measurements succeeded for `settle`/`withdraw` but reverted out of gas for
+   `createMarket` and one final settlement quote. Replaying the failed txs at
+   `block−1` with a 2 M gas cap succeeded — proof it was out of gas, not a logic
+   revert. `createMarket` re-estimated 172,678 (not the 160,575 of a warm state),
+   a 7.5 % swing from storage warmth.
+2. **The mock's first-call cost is a real state.** `test/gas.test.js` measures the
+   first `approve` (47,242 — a fresh SSTORE) and the first `createMarket`
+   (182,324 — the two allowance SSTOREs). Both exceed a warm live estimate, so the
+   120 % tripwire correctly rejected the +5 %-only values.
+
+Re-measure method (repeatable): take a real tx hash per op from the bot log, then
+`eth_estimateGas({from,to,data}, block_identifier=tx.blockNumber-1)`; for ops with
+no live tx of that shape, build the calldata with a future expiry and estimate at
+`latest`. `receipt.gasUsed` is useless on Monad — it echoes the limit.
+
+Per round with the adopted limits (3 submits + 2 settles + 2 withdraws + 1 createMarket):
+
 | op | gas | MON |
 |---|---|---|
-| 3 × submitQuote (2 final + restock) | 1.2 M | ~0.12 |
-| 2 × settle | 200 k | ~0.02 |
-| 2 × withdraw | 400 k | ~0.04 |
-| createMarket | 250 k | ~0.026 |
-| **total** | | **~0.21** |
+| 3 × submitQuote | 946 k | ~0.097 |
+| 2 × settle | 146 k | ~0.015 |
+| 2 × withdraw | 259 k | ~0.026 |
+| createMarket | 219 k | ~0.022 |
+| **total** | **~1.57 M** | **~0.160** |
+
+vs ~0.21 MON/round before (**~24 % cut**). The burn measured over a live afternoon
+with the old limits was ~0.87 MON/h (three pairs); the new table brings that toward
+~0.66 MON/h. The remaining cost is structural (every round pays for a createMarket,
+a restock, and a settle+withdraw pair) — the next lever is the upstream lazy
+settlement (§7.2), which removes the settle transactions entirely.
 
 ## 11. Risks
 
