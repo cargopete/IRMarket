@@ -3,21 +3,22 @@ import { ethers } from "ethers";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { chainInfo, blockSeconds, registryFile } from "./networks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
-const OUT_FILE = path.join(rootDir, "deployment-assets.json");
 
 const DRY_RUN = process.argv.includes("--dry-run");
 
 const RPC_URL = process.env.RPC_URL || "https://testnet-rpc.monad.xyz";
 const CHAIN_ID = Number(process.env.CHAIN_ID || 10143);
+const OUT_FILE = path.join(rootDir, registryFile("assets", CHAIN_ID));
 const FEE_BPS = Number(process.env.FEE_BPS || 100);
 const EXPIRY_SECONDS = Number(process.env.EXPIRY_SECONDS || 1800);
 const ASSET_NAME_PREFIX = process.env.ASSET_NAME_PREFIX || "";
 const ASSETS_RAW = process.env.ASSETS || "NVDA:130,GLM:1,SNDK:50";
 
-const BLOCK_SECONDS = 0.3;
+const BLOCK_SECONDS = blockSeconds(CHAIN_ID);
 const MINT_BASE = ethers.parseEther("1000000");
 const MIN_QUOTE = ethers.parseEther("1000000");
 const MAX_UINT = ethers.MaxUint256;
@@ -106,7 +107,7 @@ async function main() {
 
   console.log("=== Deploy Multi-Asset Markets ===");
   console.log(`Deployer: ${addr}`);
-  console.log(`Balance:  ${ethers.formatEther(await provider.getBalance(addr))} MON`);
+  console.log(`Balance:  ${ethers.formatEther(await provider.getBalance(addr))} ${chainInfo(CHAIN_ID).symbol}`);
   console.log(`Market:   ${marketAddr}`);
   console.log(`Oracle:   ${oracleAddr}`);
   console.log(`Quote:    ${quoteAddr}`);
@@ -202,7 +203,7 @@ async function main() {
   }
 
   const out = {
-    network: "monad-testnet",
+    network: chainInfo(CHAIN_ID).slug,
     chainId: CHAIN_ID,
     oracle: oracleAddr,
     market: marketAddr,
