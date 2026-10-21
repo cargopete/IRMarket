@@ -319,18 +319,32 @@ the run. Only keep the balance from reaching ~0.
 
 | check | result |
 |---|---|
-| reverted txs across 5 + 2 observed rounds | **0** |
+| reverted txs across all observed rounds | **0** |
 | `post_send_gap_blocks` (broadcast → inclusion) | −1…1 |
 | `dt_send_s` from AWS | **0.52–0.9 s** (vs 1.0–3.3 s from a laptop) |
 | canonical handover | E-quote settles first, settlement quote settles last → canonical becomes the settlement quote's price |
 | late-submit recovery path | exercised live (submitted at ~E+21, included inside the window) |
 | per-step cost after Multicall3 batching | **1 call / 1.18 s** vs 3 calls / 10.35 s (8.8×) |
 | `step: N RPC reads` | 1 (batched) |
+| at-lead submission | **partially achieved** — see below |
 
-Still to confirm on the box: the at-lead label appearing as
-`label='final settlement quote'` (no `(late)` suffix) now that a step fits inside
-the near-expiry band — that is the freshness claim of §3, and it needs one full
-round observed after the batching deploy.
+At-lead observation after deploying the batched reads (2026-10-21, three pairs
+rolling back-to-back, expiries clustered within ~42 blocks):
+
+| pair | label | price read at |
+|---|---|---|
+| NVDA | `final settlement quote` (no `(late)`) | **~E−3 blocks** — the true bell price |
+| GLM | `final settlement quote (late)` | ~E+30 blocks (~9 s past the bell) |
+| DEEPSEEK | `final settlement quote (late)` | ~E+30 blocks (~9 s past the bell) |
+
+All three still: settle order correct, canonical handed over by the settlement
+quote, 0 reverts, rounds rolled. The residual intermittency is the **multi-pair
+phase** (plan risk 5), not the step cost: the three pairs' expiries cluster within
+~42 blocks because they are rolled back-to-back, so all three enter their windows
+at once; during the window each pair issues ~4 transactions, so one full cycle
+through three pairs spans ~50–65 blocks — marginal against the 68-block band.
+Closing it fully needs the round expiries **staggered** (e.g. offset each pair's
+roll by `ROUND_BLOCKS / n_pairs`), not more batching.
 
 ## 10. Gas budget per round (at 102 gwei, measured)
 
