@@ -108,21 +108,28 @@ MULTICALL3_ABI = [
 ]
 
 # Fixed gas limits — Monad bills the gas LIMIT, not gas used (sc-tech-spec §7), so an
-# inflated limit burns MON on every single send. These are measured gasUsed plus
-# head-room, not round numbers pulled out of the air:
+# inflated limit burns MON on every single send. These are **measured gasUsed + 5%**,
+# re-measured on the live stack 2026-10-21 with `eth_estimateGas` on the exact calldata
+# of real bot transactions (historical block where needed):
 #
-#   approve         33,586   live eth_estimateGas on the deployed quote token
-#   submit_quote   292,944   live eth_estimateGas on the deployed oracle
-#   settle          65,429   live eth_estimateGas on the deployed oracle
-#   withdraw       123,194   live eth_estimateGas on the UPSTREAM oracle (the old
-#                           fork needed only 74,295; 120,000 was too tight here and
-#                           made every withdraw revert out-of-gas)
-#   create_market 198,542   live eth_estimateGas on the deployed wrapper; it is
-#                           this high because createMarket makes two unconditional
-#                           forceApprove calls (contracts/IRMarket.sol). The guard
-#                           added there cuts it ~25% (locally 181,968 -> 135,212),
-#                           i.e. ~150,000, so 250,000 covers both the deployed and
-#                           the fixed contract.
+#   op             live cold   mock first    adopted
+#   approve            33,586       47,242      56,691
+#   submit_quote      287,219      262,844     315,413
+#   settle             48,192       60,796      72,956
+#   withdraw          123,206       ~49,000     129,367
+#   create_market     172,678      182,324     218,789
+#
+# "live cold" = eth_estimateGas on the real oracle/wrapper (the production path);
+# "mock first" = the local Hardhat gas test, which also covers the FIRST-call state
+# (fresh allowance slot) that a warm live estimate misses. Adopted = the larger of
+# live x1.05 and mock x1.20, so both the production cost and test/gas.test.js's
+# 120% headroom tripwire are satisfied. A test run with the bare live values
+# reverted createMarket and one submitQuote out of gas — the tripwire was right.
+#
+# The old table carried 30-50% head-room per op; on Monad that head-room is paid on
+# every send (limit x gas price), so it was pure burn: the bot spent ~0.87 MON/hour
+# with three pairs at 102 gwei. The measured values are stable across samples (+-12
+# gas), and the 5% buffer covers a colder storage path.
 #
 # Re-measure with `npx hardhat run script/gas-report.js` (local) or eth_estimateGas
 # (live) before changing any of these. test/gas.test.js fails if a limit drops below
@@ -135,11 +142,11 @@ MULTICALL3_ABI = [
 # Each entry is overridable with GAS_<OP>_WEI (e.g. GAS_SUBMIT_QUOTE_WEI=500000) so a
 # limit can be bumped in production without a code change.
 GAS_DEFAULTS = {
-    "approve": 60_000,
-    "submit_quote": 400_000,
-    "settle": 100_000,
-    "withdraw": 200_000,
-    "create_market": 250_000,
+    "approve": 56_691,
+    "submit_quote": 315_413,
+    "settle": 72_956,
+    "withdraw": 129_367,
+    "create_market": 218_789,
 }
 
 

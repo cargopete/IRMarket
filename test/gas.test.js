@@ -29,11 +29,11 @@ const E18 = 10n ** 18n;
 // Configured limits (mirror of bot/verifier.py GAS_DEFAULTS)
 // ---------------------------------------------------------------------------
 const BOT_GAS = {
-  approve: 60_000n,
-  submit_quote: 400_000n,
-  settle: 100_000n,
-  withdraw: 200_000n,
-  create_market: 250_000n,
+  approve: 56_691n,
+  submit_quote: 315_413n,
+  settle: 72_956n,
+  withdraw: 129_367n,
+  create_market: 218_789n,
 };
 
 // ---------------------------------------------------------------------------
