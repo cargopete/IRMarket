@@ -24,11 +24,16 @@ _Tracking convention: this file is only an index — each item references a GH i
 - Plan: `docs/plan/one-market-per-pair-plan.md`
 - Status: **TODO** — plan complete (**Not started**); implementation pending.
 
-## Merge the real price-feed change (`feat/real-price-feed` → `feat/monoracle-upstream`)
+## Merge the real price-feed change (`feat/real-price-feed` → `main`)
 
 - GH: https://github.com/dixia/IRMarket/issues/13
 - Spec: `docs/design/bot-real-price-feed-spec.md` (in the `IRMarket-pricefeed` worktree)
-- Status: **TODO** — changes uncommitted in that worktree; commit + merge pending.
+- Status: **PR #21 open, MERGEABLE — all checks green; ready to merge.** 11 commits on `feat/real-price-feed` (spec, feed module + wiring, SOXX/descriptors, test marker, outage-halt fix, main merges, Nebius GPU feed from #28, retry throttle + step guard, CI/nits). All review items closed: outage halt policy, retry throttle (1 attempt/TTL), throttled-tick log spam, malformed-row robustness, CI `bot` job (green), Nasdaq market-status logging, nits. Bot suite 54/54; `contracts`/`web`/Vercel green. Remaining: the merge itself. (The `feat/monoracle-upstream` base named in the issue does not exist on the remote; base is `main`.)
+
+## Nebius spot GPU price feed (research + impl)
+
+- GH: https://github.com/dixia/IRMarket/issues/28
+- Status: **DONE** — `NebiusSource` (unauthenticated `api.nebius.cloud/billing/v1alpha1/spot-price`, lowest-across-regions or `@region` pin, USD/GPU-hour) implemented on `feat/real-price-feed` (commit `9448a95`, part of PR #21); live-verified against nebius.com/spot-prices; 46/46 tests. Issue closed; merges with PR #21.
 
 ## Pilot Envio HyperIndex/HyperSync for web + bot on-chain data layer
 
@@ -59,3 +64,18 @@ _Tracking convention: this file is only an index — each item references a GH i
 
 - GH: https://github.com/dixia/IRMarket/issues/17
 - Status: **OPEN** — 依赖：无，优先搭建（底盘）；输出：多项目任务系统、Agent 认领 task、每日自动报告。
+
+## Bot: the mark quote reverts on testnet (delivery latency, wide)
+
+- GH: https://github.com/dixia/IRMarket/issues/22
+- Status: **FIXED (code)** — root cause: the bot's loop period (~42–65 blocks on the ops box, each RPC ~1.5 s) exceeded the 2-block submission window, so the closing-price quote was submitted after its own expiry and reverted; measured inclusion latency is 0–2 blocks, so the network was never the bottleneck. Fix: the round's final quote gets its own expiry `E + SETTLEMENT_WINDOW_BLOCKS` (default 60), a fresh trading quote settles right after `E`, the wrapper gates trading at the market expiry, and the loop polls fast near the bell. Merged to `main`; live-verified on the AWS ops box (0 reverted txs; `dt_send_s` 0.52–0.9 s there vs 1.0–3.3 s locally). Plan: `docs/plan/settlement-quote-timing-plan.md`.
+
+## Production cutover: wrapper redeploy (trade gate + right-sized gas)
+
+- GH: https://github.com/dixia/IRMarket/issues/27
+- Status: **DONE (2026-10-19)** — `irmarket.xyz` now runs the redeployed wrapper `0x3B08bd1C…` (oracle `0x8073…` unchanged; vault `0x95a7…` and all tokens reused, 15,002 HKD LP equity intact). Ops bot re-pointed + restarted (first line: `create_market=250,000`). Rollback = re-promote the previous production deployment + restore the server's `*.bak-preW2` bot config. Old wrapper `0x39A1…` stays on-chain, dormant.
+
+## Frontend: real-time market data & interaction performance overhaul (P0–P2)
+
+- GH: https://github.com/dixia/IRMarket/issues/29
+- Status: **OPEN** — WS push relay + global store (P0-1), RollingNumber (P0-2), fine-grained selectors (P0-3), theme bootstrap + up/down colors (P0-4); P1 optimistic UI / tiered polling / chunk preload / PWA / i18n; P2 session keys / stream origin / docs SSG / brand visuals. No contract changes; relay is a stateless indexer.

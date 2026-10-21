@@ -2,7 +2,9 @@
 
 No network: the bot object is built via `object.__new__` (skipping BotContext), the
 oracle is a stub, and `_send` records calls instead of broadcasting. Covers
-docs/plan/one-market-per-pair-plan.md §5.
+docs/plan/one-market-per-pair-plan.md §5 as merged with the settlement-window /
+bounded-bookkeeping code on `main` (round = QUOTE expiry; the bot never creates
+markets in its loop).
 
 Run:  py -m unittest discover -s bot/tests -v
 """
@@ -63,6 +65,14 @@ class _Fn:
         return self._fn()
 
 
+class _Fn2:
+    def __init__(self, fn):
+        self._fn = fn
+
+    def build_transaction(self, tx):
+        return tx
+
+
 class _StubW3:
     def __init__(self, block):
         self.eth = type("Eth", (), {"block_number": block})()
@@ -82,18 +92,25 @@ class make_bot:
         b.address = BOT
         b.round_blocks = 3000
         b.lead_blocks = 2
+        b.settlement_window_blocks = 60
         b.auto_create = False
         b.requote = False
         b.market_id = 1
-        b._own_quotes = set()
-        b._own_cache = {}
-        b._withdrawn = set()
+        # Merged (main) bookkeeping: bounded sets + per-round state + read cache.
+        b._own_current = set()
+        b._pending_own = set()
+        b._settlement_quote_id = None
+        b._round_swept = False
         b._round_expiry = None
-        b._final_submitted = False
+        b._read_cache = {}
+        b._read_count = 0
+        b._booted = False
+        b._last_head = None
+        b._last_expiry = None
         b.sends = []
         b.w3 = _StubW3(block)
 
-        def _send(fn, gas, label):
+        def _send(fn, gas, label, decision_block=None, decision_ts=None):
             b.sends.append(label)
             return None
 
@@ -104,6 +121,9 @@ class make_bot:
                 return 100 * WAD
 
         b.feed = _Feed()
+        # No Multicall3 in unit tests: fall back to sequential `_market()`.
+        b._read_snapshot = lambda: None
+        b._market = lambda: (BASE, QUOTE, BOT, 100, 10**9, 0)
 
         if ledger is not None:
             self.ledger = ledger
@@ -135,13 +155,6 @@ class make_bot:
             def withdrawProviderFunds(self, qid):
                 return _Fn2(lambda: calls.append(("withdraw", qid)))
 
-        class _Fn2:
-            def __init__(self, fn):
-                self._fn = fn
-
-            def build_transaction(self, tx):
-                return tx
-
         class _Oracle:
             pass
 
@@ -155,10 +168,11 @@ class make_bot:
 class TestSyncRound(unittest.TestCase):
     def test_adopts_max_live_own_expiry(self):
         bot = make_bot().bot
-        bot._own_cache = {
+        bot._own_current = {1, 2}
+        bot._quote_cached = lambda qid: {
             1: quote_dict(expiry=900),
-            2: quote_dict(expiry=1200, status=VETOED_UNDERPRICED),
-        }
+            2: quote_dict(expiry=1200),
+        }[qid]
         bot._sync_round(block=1000)
         self.assertEqual(bot._round_expiry, 1200)
 
@@ -168,13 +182,15 @@ class TestSyncRound(unittest.TestCase):
             2: quote_dict(provider=STRANGER, expiry=1500),   # other provider, live
         })
         bot = m.bot
+        bot._own_current = {1}
         bot._sync_round(block=1000)
         self.assertEqual(bot._round_expiry, 1500)
         self.assertEqual(m.calls, [])  # scan only — no sends
 
-    def test_nothing_live_anywhere_starts_fresh(self):
+    def test_nothing_live_anywhere_leaves_none(self):
         m = make_bot(ledger={1: quote_dict(expiry=800)})  # own, expired
         bot = m.bot
+        bot._own_current = {1}
         bot._sync_round(block=1000)
         self.assertIsNone(bot._round_expiry)
 
@@ -186,109 +202,110 @@ class TestSyncRound(unittest.TestCase):
         bot._sync_round(block=1000)
         self.assertIsNone(bot._round_expiry)
 
-    def test_set_round_change_resets_final_flag(self):
+    def test_own_settlement_quote_maps_back_to_its_round(self):
+        # A live quote with expiry within G of the head can only be the E+G
+        # settlement quote, so the round it serves is E = expiry - G.
+        m = make_bot(ledger={1: quote_dict(expiry=1030)})  # own, live, inside window
+        bot = m.bot
+        bot._own_current = {1}
+        bot._sync_round(block=1000)
+        self.assertEqual(bot._round_expiry, 970)
+
+    def test_set_round_change_resets_round_state(self):
         bot = make_bot().bot
-        bot._final_submitted = True
+        bot._settlement_quote_id = 42
+        bot._round_swept = True
         bot._set_round(500)
         self.assertEqual(bot._round_expiry, 500)
-        self.assertFalse(bot._final_submitted)
-        bot._final_submitted = True
-        bot._set_round(500)  # same round -> flag kept
-        self.assertTrue(bot._final_submitted)
+        self.assertIsNone(bot._settlement_quote_id)
+        self.assertFalse(bot._round_swept)
+        bot._settlement_quote_id = 43
+        bot._set_round(500)  # same round -> state kept
+        self.assertEqual(bot._settlement_quote_id, 43)
 
-    def test_start_round_uses_round_blocks(self):
-        bot = make_bot().bot
+    def test_start_round_uses_round_blocks_and_never_creates_market(self):
+        m = make_bot(ledger={})
+        bot = m.bot
         expiry = bot._start_round(block=1000)
         self.assertEqual(expiry, 4000)
         self.assertEqual(bot._round_expiry, 4000)
-        self.assertFalse(bot._final_submitted)
+        self.assertEqual(bot.sends, [])
+        self.assertEqual(m.calls, [])
 
 
-class TestSettleExpiredRounds(unittest.TestCase):
-    def test_settles_only_expired_active_quotes_oldest_round_first(self):
+class TestSettleRound(unittest.TestCase):
+    def test_settles_and_withdraws_only_this_rounds_own_quotes(self):
         ledger = {
-            1: quote_dict(expiry=800, status=ACTIVE),                                     # own q1 (expired)
-            2: quote_dict(provider=STRANGER, expiry=800, status=ACTIVE),                  # stranger (expired)
-            3: quote_dict(expiry=1800, status=ACTIVE),                                    # own q3 (live)
-            4: quote_dict(expiry=700, status=SETTLED_VALID),                              # already settled
-            5: quote_dict(provider=STRANGER, base=OTHER_BASE, expiry=700, status=ACTIVE), # other pair
-            6: quote_dict(expiry=700, status=ACTIVE),                                     # own q6 (older round)
+            1: quote_dict(expiry=800, status=ACTIVE),                 # own, this round
+            2: quote_dict(provider=STRANGER, expiry=800, status=ACTIVE),  # not ours
+            3: quote_dict(expiry=1800, status=ACTIVE),                # own, another round
+            4: quote_dict(expiry=800, status=ACTIVE),                 # own, this round (higher id)
         }
         m = make_bot(ledger=ledger)
         bot = m.bot
-        bot._own_quotes = {1, 3, 4, 6}
-        bot._own_cache = {1: ledger[1], 3: ledger[3], 4: ledger[4], 6: ledger[6]}
-        bot.settle_expired_rounds(block=1000)
-        settles = [s for s in bot.sends if s.startswith("settle q")]
-        qids = [int(s.split("q")[1]) for s in settles]
-        # oldest-expiring first: round 700 (q6) before round 800 (q1, then the stranger q2)
-        self.assertEqual(qids, [6, 1, 2])
-        # our own q4 (SETTLED_VALID, expired from the initial snapshot) is withdrawn;
-        # q1/q6 settle first and are withdrawn on a later cycle once the cache refreshes.
+        bot._own_current = {1, 3, 4}
+        bot.settle_round(800)
+        settles = [int(s.split("q")[1]) for s in bot.sends if s.startswith("settle q")]
+        self.assertEqual(settles, [1, 4])  # sorted ids, this round only
+        # each ACTIVE quote is withdrawn in the same pass
         withdraws = [int(s.split("q")[1]) for s in bot.sends if s.startswith("withdraw q")]
-        self.assertEqual(withdraws, [4])
+        self.assertEqual(withdraws, [1, 4])
+        self.assertEqual(m.calls, [])  # _send is stubbed; nothing broadcast
 
-    def test_no_send_when_everything_is_live(self):
-        m = make_bot(ledger={1: quote_dict(expiry=1800, status=ACTIVE)})
+    def test_no_send_for_live_rounds(self):
+        ledger = {1: quote_dict(expiry=1800, status=ACTIVE)}
+        m = make_bot(ledger=ledger)
         bot = m.bot
-        bot._own_quotes = {1}
-        bot._own_cache = dict(m.ledger)
-        bot.settle_expired_rounds(block=1000)
-        self.assertEqual([c for c in m.calls if c[0] == "settle"], [])
+        bot._own_current = {1}
+        bot.settle_round(800)  # nothing matches expiry 800
         self.assertEqual(bot.sends, [])
 
-    def test_withdraws_own_finished_expired_quotes(self):
-        m = make_bot(ledger={
-            1: quote_dict(expiry=800, status=SETTLED_VALID),
-            2: quote_dict(expiry=800, status=VETOED_UNDERPRICED),
-        })
+    def test_withdraws_pending_settled_quotes_of_this_round(self):
+        ledger = {1: quote_dict(expiry=800, status=SETTLED_VALID)}
+        m = make_bot(ledger=ledger)
         bot = m.bot
-        bot._own_quotes = {1, 2}
-        bot._own_cache = dict(m.ledger)
-        bot.settle_expired_rounds(block=1000)
-        self.assertEqual(bot._withdrawn, {1, 2})
-        self.assertEqual([c for c in m.calls if c[0] == "settle"], [])
+        bot._pending_own = {1}
+        bot.settle_round(800)
+        self.assertEqual([s for s in bot.sends if s.startswith("settle q")], [])
+        self.assertIn("withdraw q1", bot.sends)
 
 
 class TestRescanOwnQuotes(unittest.TestCase):
-    def test_scans_backwards_with_early_stop_and_caches(self):
+    def test_scans_backwards_with_early_stop(self):
         ledger = {}
         qid = 1
         for _ in range(30):
             ledger[qid] = quote_dict(provider=STRANGER, expiry=1000)
             qid += 1
-        ledger[qid] = quote_dict(expiry=1200)
+        ledger[qid] = quote_dict(expiry=1200)  # ours, newest
         m = make_bot(ledger=ledger)
         bot = m.bot
-        bot._rescan_own_quotes()
-        self.assertIn(qid, bot._own_quotes)
-        self.assertEqual(bot._own_cache[qid]["expiryBlock"], 1200)
-        self.assertNotIn(1, bot._own_quotes)
+        bot._rescan_own_quotes(1000)
+        self.assertIn(qid, bot._own_current)
+        self.assertNotIn(1, bot._own_current)  # early stop before reaching the tail
+        self.assertIsNone(bot._settlement_quote_id)
+
+    def test_classifies_settlement_quote(self):
+        m = make_bot(ledger={1: quote_dict(expiry=1060)})  # E + G
+        bot = m.bot
+        bot._rescan_own_quotes(1000)
+        self.assertEqual(bot._settlement_quote_id, 1)
+        self.assertEqual(bot._own_current, set())
 
 
 class TestStepFlow(unittest.TestCase):
     def _bot(self, ledger):
         m = make_bot(ledger=ledger)
-        bot = m.bot
-        return bot, m
+        return m.bot, m
 
     def test_expired_own_quote_settles_then_quotes_new_15min_round(self):
         ledger = {1: quote_dict(expiry=900, status=ACTIVE)}  # own, expired at block=1000
         bot, m = self._bot(ledger)
-        bot._own_quotes = {1}
-        bot._own_cache = {1: dict(ledger[1])}
-
         submitted = []
-
-        def fake_submit(expiry, label):
-            submitted.append((expiry, label))
-            return 99
-
-        bot.submit_quote = fake_submit
+        bot.submit_quote = lambda expiry, label, **kw: submitted.append((expiry, label)) or 99
         bot.step()
-        # expired quote settled (full scan path) BEFORE round derivation
+        # expired own round settled (recovery) before a fresh round starts
         self.assertIn("settle q1", bot.sends)
-        # a fresh 15-min round started and restocked exactly once
         self.assertEqual(len(submitted), 1)
         expiry, label = submitted[0]
         self.assertEqual(expiry, 1000 + bot.round_blocks)
@@ -296,24 +313,14 @@ class TestStepFlow(unittest.TestCase):
         self.assertEqual(bot._round_expiry, expiry)
 
     def test_live_vetoed_round_is_served_not_replaced(self):
-        ledger = {
-            1: quote_dict(expiry=1500, status=VETOED_UNDERPRICED),  # own, vetoed, live
-        }
+        ledger = {1: quote_dict(expiry=1500, status=VETOED_UNDERPRICED)}  # own, live
         bot, m = self._bot(ledger)
-        bot._own_quotes = {1}
-        bot._own_cache = {1: dict(ledger[1])}
-
         submitted = []
-
-        def fake_submit(expiry, label):
-            submitted.append((expiry, label))
-            return 99
-
-        bot.submit_quote = fake_submit
+        bot.submit_quote = lambda expiry, label, **kw: submitted.append((expiry, label)) or 99
         bot.step()
         # the vetoed quote is withdrawn (2x return) — never re-settled
         self.assertIn("withdraw q1", bot.sends)
-        # round adopted from own quote; restock submitted at the SAME expiry
+        # round adopted from the own quote; restock at the SAME expiry
         self.assertEqual(len(submitted), 1)
         self.assertEqual(submitted[0][0], 1500)
         self.assertEqual(bot._round_expiry, 1500)
@@ -321,11 +328,8 @@ class TestStepFlow(unittest.TestCase):
     def test_active_quote_present_means_no_restock(self):
         ledger = {1: quote_dict(expiry=1500, status=ACTIVE)}
         bot, m = self._bot(ledger)
-        bot._own_quotes = {1}
-        bot._own_cache = {1: dict(ledger[1])}
-
         submitted = []
-        bot.submit_quote = lambda expiry, label: submitted.append(expiry) or 99
+        bot.submit_quote = lambda expiry, label, **kw: submitted.append(expiry) or 99
         bot.step()
         self.assertEqual(submitted, [])
 

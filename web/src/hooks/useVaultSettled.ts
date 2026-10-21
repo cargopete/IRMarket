@@ -2,54 +2,20 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { usePublicClient } from "wagmi";
-import { decodeEventLog, type AbiEvent, type Address } from "viem";
+import { decodeEventLog, type AbiEvent } from "viem";
 import { VAULT_ABI } from "@/lib/abis/vault";
+import { getLogsChunked } from "@/lib/logs";
 import { VAULT_ADDRESS, VAULT_ADDRESS_RAW, hasVault } from "@/lib/config";
 import { useCurrentBlock } from "./useCurrentBlock";
 
-// Monad testnet RPCs cap eth_getLogs at a ~100-block range (see usePositions.ts), so event
-// history is fetched in chunked windows. PositionSettled stores the realized payout that the
-// struct itself does not persist (lp-pool-frontend-design §2/§4.5).
-const LOG_CHUNK_BLOCKS = 100n;
+// PositionSettled stores the realized payout that the struct itself does not persist
+// (lp-pool-frontend-design §2/§4.5); the chunked read window mirrors usePositions.
 const LOOKBACK_BLOCKS = 5000n;
 
 const POSITION_SETTLED_EVENT = VAULT_ABI.find(
   (e): e is Extract<(typeof VAULT_ABI)[number], { type: "event" }> =>
     e.type === "event" && e.name === "PositionSettled",
 ) as AbiEvent;
-
-interface RawLog {
-  data: `0x${string}`;
-  topics: `0x${string}`[];
-}
-
-async function getLogsChunked(
-  publicClient: NonNullable<ReturnType<typeof usePublicClient>>,
-  params: { address: Address; event: AbiEvent; fromBlock: bigint; toBlock: bigint },
-): Promise<RawLog[]> {
-  const ranges: Array<{ from: bigint; to: bigint }> = [];
-  let from = params.fromBlock;
-  while (from <= params.toBlock) {
-    const to = from + LOG_CHUNK_BLOCKS - 1n > params.toBlock ? params.toBlock : from + LOG_CHUNK_BLOCKS - 1n;
-    ranges.push({ from, to });
-    from = to + 1n;
-  }
-
-  const results = await Promise.all(
-    ranges.map(({ from: f, to: t }) =>
-      publicClient
-        .getLogs({
-          address: params.address,
-          event: params.event,
-          fromBlock: f,
-          toBlock: t,
-        })
-        .then((logs) => logs.map((l) => ({ data: l.data, topics: l.topics as `0x${string}`[] })))
-        .catch(() => [] as RawLog[]),
-    ),
-  );
-  return results.flat();
-}
 
 export interface VaultSettledPayout {
   settlePrice: bigint;
@@ -74,7 +40,7 @@ export function useVaultSettledPayouts(account?: `0x${string}`): {
       const fromBlock = latest > LOOKBACK_BLOCKS ? latest - LOOKBACK_BLOCKS : 0n;
 
       const raw = await getLogsChunked(publicClient, {
-        address: VAULT_ADDRESS as Address,
+        address: VAULT_ADDRESS as `0x${string}`,
         event: POSITION_SETTLED_EVENT,
         fromBlock,
         toBlock: latest,

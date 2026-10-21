@@ -26,6 +26,8 @@
  *   $env:ORACLE_ADDRESS  = "<upstream oracle>"          # REQUIRED; exit 1 if missing
  *   $env:PRIVATE_KEY     = "<funded deployer>"          # required for a real run
  *   node script/deploy-market-stack.js [ --dry-run ]    # --dry-run: checks + plan, zero txs
+ *   --fresh-wrapper (FRESH_WRAPPER=1)                   # deploy a new wrapper even when the
+ *                                                       # registry's wrapper binds this oracle
  *   FRESH_TOKENS=1 / --fresh-tokens                     # force-deploy brand-new tokens
  *   MARKET_MAKER="<addr>"                               # marketMaker for created markets (default: deployer)
  *   MARKET_EXPIRY_BLOCKS=3000                           # market's (inert) expiryBlock, 15 min @0.3s
@@ -36,12 +38,18 @@ import { ethers } from "ethers";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { shouldReuseWrapper, shouldReuseVault } from "./stack-reuse.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 
 const DRY_RUN = process.argv.includes("--dry-run");
 const FRESH_TOKENS = process.env.FRESH_TOKENS === "1" || process.argv.includes("--fresh-tokens");
+// --fresh-wrapper (FRESH_WRAPPER=1): force a brand-new wrapper even when the registry's
+// wrapper binds the same oracle. Without it a same-oracle re-run silently KEEPS the
+// old wrapper — which is how the wrapper gate (issue #22) ended up "not on chain"
+// while main carried it. Tokens and the vault still reuse normally.
+const FRESH_WRAPPER = process.env.FRESH_WRAPPER === "1" || process.argv.includes("--fresh-wrapper");
 const RPC_URL = process.env.RPC_URL || "https://testnet-rpc.monad.xyz";
 const CHAIN_ID = Number(process.env.CHAIN_ID || 10143);
 const FEE_BPS = BigInt(process.env.FEE_BPS || "100");
@@ -53,7 +61,27 @@ const MARKET_MAKER = process.env.MARKET_MAKER || "";
 const DECIMALS = 18;
 const QUOTE_NAME = process.env.QUOTE_NAME || "HKD";
 const QUOTE_SYMBOL = process.env.QUOTE_SYMBOL || "HKD";
-const ASSETS_RAW = process.env.ASSETS || "NVDA:230,GLM:2.5,SNDK:88,DEEPSEEK:45";
+const ASSETS_RAW = process.env.ASSETS || "NVDA:230,GLM:2.5,SNDK:88,DEEPSEEK:45,SOXX:514";
+
+// Per-symbol real-price descriptor merged into deployment-assets.json so the bot knows how to
+// price each asset (docs/design/bot-real-price-feed-spec.md §6.1). Unknown symbols => synthetic.
+const FEED_DESCRIPTORS = {
+  NVDA: { priceSource: "nasdaq", priceSymbol: "NVDA", assetClass: "stocks" },
+  SNDK: { priceSource: "nasdaq", priceSymbol: "SNDK", assetClass: "stocks" },
+  SOXX: { priceSource: "nasdaq", priceSymbol: "SOXX", assetClass: "etf" },
+  GLM: { priceSource: "sina", priceSymbol: "hk02513", assetClass: "stocks" },
+  DEEPSEEK: { priceSource: "synthetic" },
+  // Nebius spot GPU prices (USD per GPU-hour; lowest across regions unless
+  // priceSymbol pins one with `@region` — not exercised by any default entry;
+  // set e.g. priceSymbol: "B300@us-central1" to pin). Opt-in via
+  // ASSETS=B300:<fair> — no token/market exists for these by default.
+  B300: { priceSource: "nebius", priceSymbol: "B300", assetClass: "gpu" },
+  B200: { priceSource: "nebius", priceSymbol: "B200", assetClass: "gpu" },
+  H200: { priceSource: "nebius", priceSymbol: "H200", assetClass: "gpu" },
+  H100: { priceSource: "nebius", priceSymbol: "H100", assetClass: "gpu" },
+  "RTX PRO 6000": { priceSource: "nebius", priceSymbol: "RTX PRO 6000", assetClass: "gpu" },
+};
+const feedDescriptor = (symbol) => FEED_DESCRIPTORS[symbol] || { priceSource: "synthetic" };
 
 const ORACLE_ADDRESS = process.env.ORACLE_ADDRESS;
 if (!ORACLE_ADDRESS) {
@@ -149,19 +177,33 @@ async function main() {
   console.log(`RPC ${RPC_URL} chainId ${CHAIN_ID}`);
   console.log(`oracle  (consumed): ${oracleAddr}`);
   console.log(`assets: ${assets.map((a) => `${a.symbol}@${ethers.formatEther(a.fairPrice)}`).join(", ")}`);
-  console.log(`token mode: ${FRESH_TOKENS ? "FRESH (force new, FOR testing only)" : "reuse registry (mint top-ups, never redeploy)"}\n`);
+  console.log(`token mode: ${FRESH_TOKENS ? "FRESH (force new, FOR testing only)" : "reuse registry (mint top-ups, never redeploy)"}`);
+  console.log(`wrapper mode: ${FRESH_WRAPPER ? "FRESH (--fresh-wrapper: deploy new even if the registry's wrapper binds this oracle)" : "reuse if the registry's wrapper binds this oracle"}\n`);
 
   // reuse decisions
   const reuseQuote = !FRESH_TOKENS && registry?.quoteToken && ethers.isAddress(registry.quoteToken) ? registry.quoteToken : undefined;
   const bySymbol = new Map((registry?.assets || []).map((a) => [a.symbol, a]));
 
+  // deployment-assets.json is REWRITTEN wholesale from ASSETS at the end of this script,
+  // so a symbol present in the current registry but absent from ASSETS is silently
+  // dropped (losing its token/market links). Surface that instead of shrinking quietly.
+  const dropped = [...bySymbol.keys()].filter((s) => !assets.some((a) => a.symbol === s));
+  if (dropped.length) {
+    console.warn(
+      `WARNING: ASSETS omits registry symbol(s) ${dropped.join(", ")} — they will be DROPPED ` +
+        "from deployment-assets.json. Add them to ASSETS to keep them."
+    );
+  }
+
   // wrapper reuse: only if the existing wrapper is bound to this exact oracle
+  // (FRESH_WRAPPER=1 / --fresh-wrapper: deploy new, same-oracle rebuild — see header).
   let wrapperAddr;
-  if (registry?.market && ethers.isAddress(registry.market) && registry?.oracle === oracleAddr) {
+  if (registry?.market && ethers.isAddress(registry.market)) {
     const m = new ethers.Contract(registry.market, ["function oracle() view returns (address)"], provider);
-    try {
-      if ((await m.oracle()).toLowerCase() === oracleAddr.toLowerCase()) wrapperAddr = ethers.getAddress(registry.market);
-    } catch { /* market not an IRMarket with oracle() — deploy fresh */ }
+    const chainOracle = await m.oracle().catch(() => null);
+    if (shouldReuseWrapper(registry, chainOracle, oracleAddr, { freshWrapper: FRESH_WRAPPER })) {
+      wrapperAddr = ethers.getAddress(registry.market);
+    }
   }
   if (wrapperAddr) console.log(`[1/5] IRMarket wrapper: REUSE ${wrapperAddr}`);
   else console.log("[1/5] IRMarket wrapper: deploy new (oracle-bound at construction)");
@@ -311,6 +353,7 @@ async function main() {
       fairPrice: asset.fairPrice.toString(),
       marketId,
       expiryBlock: expiryBlock.toString(),
+      ...feedDescriptor(asset.symbol),
     });
   }
 
@@ -323,17 +366,18 @@ async function main() {
       "function priceBase() view returns (address)",
       "function settlementToken() view returns (address)",
     ], provider);
-    try {
-      const [vo, pb, st] = await Promise.all([v.oracle(), v.priceBase(), v.settlementToken()]);
-      if (vo.toLowerCase() === oracleAddr.toLowerCase() && pb.toLowerCase() === first.baseToken.toLowerCase() && st.toLowerCase() === quote.address.toLowerCase()) {
-        vault = { address: ethers.getAddress(vaultRegistry.vault), abi: vaultArtifact.abi, txHash: vaultRegistry.txHashes?.vault };
-        vaultReused = true;
-        console.log(`\n[5/5] vault REUSE ${vault.address} (bindings match)`);
-      } else {
-        console.log(`\n[5/5] vault bindings mismatch on ${vaultRegistry.vault} → deploy new`);
-      }
-    } catch (e) {
-      console.log(`\n[5/5] vault ${vaultRegistry.vault} not an IRMarketVault (read failed) → deploy new`);
+    const bindings = {
+      vault: vaultRegistry.vault,
+      oracle: await v.oracle().catch(() => null),
+      priceBase: await v.priceBase().catch(() => null),
+      settlementToken: await v.settlementToken().catch(() => null),
+    };
+    if (shouldReuseVault(bindings, { oracle: oracleAddr, baseToken: first.baseToken, quoteToken: quote.address })) {
+      vault = { address: ethers.getAddress(vaultRegistry.vault), abi: vaultArtifact.abi, txHash: vaultRegistry.txHashes?.vault };
+      vaultReused = true;
+      console.log(`\n[5/5] vault REUSE ${vault.address} (bindings match)`);
+    } else {
+      console.log(`\n[5/5] vault ${vaultRegistry.vault} bindings mismatch / not an IRMarketVault → deploy new`);
     }
   }
   if (!vault) {

@@ -87,6 +87,19 @@ export const IRMARKET_ABI = [
       { name: "fee", type: "uint256", indexed: false },
     ],
   },
+  // Custom errors (contracts/IRMarket.sol). Declared so viem decodes reverts from the
+  // wrapper's gates — without them TxStatusCard's name-based mappings can't fire and
+  // the user sees an opaque "error: 0x…" instead of a reason.
+  { type: "error", name: "MarketDoesNotExist", inputs: [] },
+  { type: "error", name: "InvalidToken", inputs: [] },
+  { type: "error", name: "IdenticalTokens", inputs: [] },
+  { type: "error", name: "FeeTooHigh", inputs: [] },
+  { type: "error", name: "ExpiryMustBeFuture", inputs: [] },
+  { type: "error", name: "ExpiryTooFar", inputs: [] },
+  { type: "error", name: "QuotePairMismatch", inputs: [] },
+  { type: "error", name: "QuoteNotActive", inputs: [] },
+  { type: "error", name: "QuoteWindowExpired", inputs: [] },
+  { type: "error", name: "MarketWindowExpired", inputs: [] },
 ] as const satisfies Abi;
 
 export const ERC20_ABI = [

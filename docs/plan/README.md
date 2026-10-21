@@ -9,6 +9,7 @@ this table is the at-a-glance view.
 | One market per pair (Option B) | **In progress** (code done; redeploy + live run pending) | `one-market-per-pair-plan.md` |
 | E2E implementation plan | **Not started** (TODO stub) | `E2E_IMPLEMENTATION_PLAN.md` |
 | IRMarket UI / business-logic fixes | **Superseded** (2026-10-14) | `ui-fix-plan.md` |
+| Final settlement quote timing (issue #22) | **In progress** — code merged to main; live-verified on the AWS ops box | `settlement-quote-timing-plan.md` |
 
 **Status legend:** Not started · In progress · Done · Superseded.
 

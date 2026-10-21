@@ -68,6 +68,13 @@ Monad veto-arbitrage 长/短市场：
 - 仓库文件禁写本机绝对路径（`C:\Users\iamh4\…`），统一用 `github.com/dixia/…` 引用。
 - 不自动 push，用户明确要求才 push。
 
+### Merge flow (protected `main`)
+- `main` 受保护：禁止直推；每个改动走 PR，必需检查 `contracts` / `web` / `bot`，且分支必须与 `main` 同步（strict）。
+- 合并方式只有 **squash**；合并后自动删分支。`gh pr merge <n> --auto --squash`。
+- 一次只合一个 PR；其余分支在每次合并后 rebase 到新 `main`。冲突在 **feature 分支** 解决，勿在 `main` 上解决。
+- 不把长期 staging 分支合进 `main`（staging 分支 ≠ staging 环境；registry 共享且上链）。
+- 完整流程与回滚/发布约定：`docs/workflows/git-merge-procedure.md`。
+
 ### Long-running commands (agent session hygiene)
 - 预计 **> ~60–90s** 的命令（playwright/e2e/视频套件、`next build`、`hardhat test`、合约部署、Vercel build）**禁止用单次前台 tool call 挂满大 timeout**：会话表现为"卡死"，协作者只能手动催。
 - 正确姿势：`Start-Process … -WindowStyle Hidden -RedirectStandardOutput/-RedirectStandardError <log>` 后台化跑，然后**短轮询**（每次 sleep 2–5s，一次 ≤ ~90s）读日志文件判断进度/完成，并在轮询之间向协作者播报中间状态；完成后再做收尾。
@@ -86,8 +93,9 @@ Monad veto-arbitrage 长/短市场：
 - 函数 selector 用 ethers 现算，勿手写。
 - 本地 env 在 `web/.env.local`（gitignored）。
 - 改动后先 `tsc`+`lint`+`build` 再部署；Vercel 链上 chunk 验证耗时，先本地验证。
-- Vercel 项目 `irmarket`（h-fbf5），域名 `irmarket.xyz`，链接文件在 `web/.vercel`。**在 `web/` 目录**部署：`npx vercel --prod --yes`（**勿从 repo root 部署**：CLI 不套用 dashboard 的 Root Directory，会直接上传 repo root 并报 `No Next.js version detected`）。**禁止**在 repo root 创建 `.vercel` 目录。
-- 新增/修改 `NEXT_PUBLIC_*`（如 `NEXT_PUBLIC_VAULT_ADDRESS`）：`web/` 下执行 `"<value>" | npx vercel env add <NAME> production`（现有变量仅 Production 作用域）；改后必须重新 `--prod` 部署，值才会内联进客户端 chunk。
+- Vercel 项目 `irmarket`（h-fbf5），域名 `irmarket.xyz`。**从 repo root 部署**（`npx vercel --yes` 预览 / `npx vercel --prod --yes` 生产）。项目 Root Directory（dashboard 设定）= `web`，它是**相对上传内容**解析的 build 设置：从 root 部署时上传里存在 `web/` 子目录 → build 正常；从 `web/` 里运行 CLI 会让上传根变成 web 的内容，`web/` 于是不存在 → 报 `Root Directory "web" does not exist`（实测，2026-10-17）。
+- repo root 的 `.vercel/project.json` 是 root-side 部署的 CLI link，gitignored（`.gitignore:53`）；缺失时用 `npx vercel link --project irmarket --yes` 重建。repo-root `.vercelignore`（`e83b56f`）保持上传精简并排除 `.env*`/`bot/`/`test/`/`docs/`/`node_modules`——本地 env 文件永不上传。
+- 新增/修改 `NEXT_PUBLIC_*`（如 `NEXT_PUBLIC_VAULT_ADDRESS`）：`"<value>" | npx vercel env add <NAME> <scope>`（scope = `production` / `preview`；从任意已 link 目录执行均可）；改后必须对该 scope 重新部署，值才会内联进客户端 chunk。要不动生产就先在 **Preview** scope 验证。
 
 ### Bot (bot/verifier.py)
 - 引号按轮次归属：quote/settle/restock 必须按 `expiryBlock == market.expiryBlock` 过滤，禁止只按交易对匹配（曾因只按 pair 把活跃轮引号当到期引号 settle 而崩溃）。
