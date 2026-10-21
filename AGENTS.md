@@ -104,7 +104,7 @@ Monad veto-arbitrage 长/短市场：
 - web3 v7 异常为 `Web3RPCError`（非 `ValueError`），nonce 竞争需 `except Exception` 后重新读取 nonce。
 - `load_dotenv()` 默认不覆盖已有环境变量；用 `$env:MARKET_ID=n`（PowerShell）可覆盖 `bot/.env` 验证不同轮次。
 - 解码事件勿用 `process_receipt`（对收据中 ERC20 Transfer 等日志报 `MismatchedABI` 噪声）；按 oracle 地址 + topic0 定向抽取（`_oracle_event_id`/`_market_created_id`）。
-- **远程部署**：生产 bot 以 systemd 服务常驻在共享 ops 服务器（与 `tick_book` 同机），`Restart=always` 随崩溃自动重启、开机自启；服务器上按仓库布局放置（`bot/verifier.py` + `abi/` + hardhat `artifacts/` + `deployment-assets.<slug>.json` + `bot/.env`）。**同一钱包只跑一个实例**——服务器侧在跑时本地不要再起（nonce 竞争）。多链时该规则按链分别成立：不同链可用同一钱包，同链不可双开。`EXPECTED_CHAIN_ID` 保持可选（服务器 `.env` 未设置），设置后 bot 会在启动时校验 RPC 链与 registry 链。服务器的连接方式 / 路径 / 密钥不在本 repo（public）记录，见 `tick_book` 仓库的 ops 文档。
+- **远程部署**：生产 bot 以 systemd 服务常驻在共享 ops 服务器（与 `tick_book` 同机），`Restart=always` 随崩溃自动重启、开机自启；服务器上按仓库布局放置（`bot/verifier.py` + `abi/` + hardhat `artifacts/` + `deployment-assets.<slug>.json` + `bot/.env`）。**同一钱包只跑一个实例**——服务器侧在跑时本地不要再起（nonce 竞争）。多链时该规则按链分别成立：不同链可用同一钱包，同链不可双开。`EXPECTED_CHAIN_ID` 保持可选（服务器 `.env` 未设置），设置后 bot 会在启动时校验 RPC 链与 registry 链。**每链一个 unit**：`irmarket-bot`（Monad，读 `bot/.env`）与 `irmarket-bot-fuji`（Fuji，`Environment=BOT_ENV_FILE=<repo>/bot/.env.fuji`）；`BOT_ENV_FILE` 未设置时回退 `bot/.env`，因此旧部署与 `scripts/ops/run_testnet_live.sh` 行为不变。服务器的连接方式 / 路径 / 密钥不在本 repo（public）记录，见 `tick_book` 仓库的 ops 文档。
 
 ### Deployment
 - 合约部署入口 `script/deploy.js`（V0.9）与 `script/deploy-market-stack.js`（生产 stack，消费上游

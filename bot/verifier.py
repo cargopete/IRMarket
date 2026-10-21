@@ -53,7 +53,12 @@ except ImportError:  # imported as a package (bot.verifier) rather than a script
 # An explicit path is immune to CWD, debugger and REPL. override=False is kept, so
 # variables already in the environment still win (e.g. $env:MARKET_ID=n overrides
 # bot/.env).
-load_dotenv(Path(__file__).resolve().parent / ".env")
+#
+# BOT_ENV_FILE selects a different env file (e.g. bot/.env.fuji for the second
+# systemd unit on the ops box). Unset -> bot/.env, so existing deployments and
+# scripts/ops/run_testnet_live.sh (which already exports BOT_ENV_FILE) behave as before.
+_ENV_OVERRIDE = os.getenv("BOT_ENV_FILE")
+load_dotenv(Path(_ENV_OVERRIDE) if _ENV_OVERRIDE else Path(__file__).resolve().parent / ".env")
 
 log = logging.getLogger("irmarket-bot")
 

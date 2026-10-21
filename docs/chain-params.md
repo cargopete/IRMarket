@@ -157,6 +157,22 @@ Fuji, ~1 h). With no bot running, the last round ages out and the Market tab sho
 yet"; either run the Fuji bot or roll a round with `createMarket`. The vault page keeps working
 (it only needs a settled canonical price).
 
+### Bot (Fuji)
+
+Runs on the shared ops server (same box as `tick_book`) as a second systemd unit:
+
+| Item | Value |
+|---|---|
+| Unit | `irmarket-bot-fuji` (`Restart=always`, enabled at boot) |
+| Env | `BOT_ENV_FILE=<repo>/bot/.env.fuji` |
+| Registry | `deployment-assets.avalanche-fuji.json` |
+| Logs | `run-fuji.log` (stdout) / `run-fuji.err.log` (bot logs) |
+| Wallet | `0xF5Cf…` — same address as the Fuji deployer |
+
+`bot/verifier.py` honors `BOT_ENV_FILE` (default `bot/.env`); that is what lets two units share one
+checkout and one venv. The Monad unit is unchanged and still loads `bot/.env`.
+
+
 
 
 
