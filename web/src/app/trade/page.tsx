@@ -26,7 +26,7 @@ function TradeContent() {
   const router = useRouter();
   const m = Number(params.get("m") ?? "");
   const side = params.get("side");
-  // Round identity = the QUOTE expiryBlock (one-market-per-pair D1/D2): `r` selects a
+  // Round identity = the QUOTE expiryBlock (one-market-per-pair; docs/web-tech-design.md §4.2): `r` selects a
   // quote round, `m` stays the pair's single trade-target market.
   const r = params.get("r") ? BigInt(params.get("r") as string) : undefined;
   const markets = useMarkets();

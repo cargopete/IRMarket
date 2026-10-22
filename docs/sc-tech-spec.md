@@ -119,7 +119,7 @@ struct Market {
   assert they talk to the right wrapper build.
 - **No pair dedup** (D-14): the same underlying may list several option markets with
   different expiries/fees; each round = a new `marketId`.
-  **Update (one-market-per-pair, docs/plan/one-market-per-pair-plan.md):** in the 15-min-round
+  **Update (one-market-per-pair):** in the 15-min-round
   operating model the wrapper keeps **ONE long-lived market per pair**. The market's own
   `expiryBlock` is inert (`openLong` validates the QUOTE's expiry); trading rounds are defined
   by the quote's `expiryBlock`. The bot never calls `createMarket` in its loop — the deploy

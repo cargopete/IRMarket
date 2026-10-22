@@ -20,7 +20,7 @@ export function MarketCard({
 }: {
   market: MarketWithMeta;
   price: bigint | undefined;
-  /** Countdown target = the ACTIVE ROUND's QUOTE expiryBlock (one-market-per-pair D1/D2):
+  /** Countdown target = the ACTIVE ROUND's QUOTE expiryBlock (one-market-per-pair; docs/web-tech-design.md §4.2):
    *  market.expiryBlock is inert, so the caller must pass the round expiry. */
   roundExpiry?: bigint;
   /** No live quote round is ahead of the current block — the card links to the trade page and pends the next round. */

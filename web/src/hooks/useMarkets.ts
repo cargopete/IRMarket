@@ -187,7 +187,7 @@ export function useMarkets(): MarketWithMeta[] {
     const set = new Set(SELECTED_BASE_TOKENS);
     return enriched.filter((m) => set.has(m.baseToken.toLowerCase()));
   }, [enriched]);
-  // One-market-per-pair (docs/plan/one-market-per-pair-plan.md): markets are the PAIR
+  // One-market-per-pair (docs/web-tech-design.md §4.2): markets are the PAIR
   // TRADE TARGET (openLong needs marketId + feeBps/marketMaker; pair/MM/fee never change),
   // NOT rounds — trading rounds come from useRounds (quote expiryBlock). Dedup to the
   // newest market per pair. `markets()` still enumerates every id (the wrapper has no

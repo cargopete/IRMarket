@@ -21,7 +21,7 @@ _Tracking convention: this file is only an index — each item references a GH i
 ## One market per pair (Option B): stop per-round createMarket; rounds keyed by quote expiry
 
 - GH: https://github.com/dixia/IRMarket/issues/12
-- Plan: `docs/plan/one-market-per-pair-plan.md`
+- Design: `docs/web-tech-design.md` §4.2 (round model) · `docs/sc-tech-spec.md` (bot/deploy)
 - Status: **IMPLEMENTED — PR #20 open, all checks green** (merged with `main` at `4291b5f`; round = quote expiry, no per-round `createMarket`, E+G settlement window + feed + Multicall3 preserved; bot 71/71, hardhat 73, tsc/eslint/next build clean). Awaiting merge.
 
 ## Merge the real price-feed change (`feat/real-price-feed` → `main`)

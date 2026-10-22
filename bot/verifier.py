@@ -2,7 +2,7 @@
 
 Implements bot/prd.md FR-BOT-001..004 on the V0.9 Veto-Market design
 (docs/sc-tech-spec.md §5.1/§8.2), under the ONE-MARKET-PER-PAIR model
-(docs/plan/one-market-per-pair-plan.md): a **round is defined by the QUOTE's
+(docs/sc-tech-spec.md): a **round is defined by the QUOTE's
 `expiryBlock`**, never by the wrapper market's (that field is inert — `openLong`
 validates only the quote's pair/ACTIVE/expiry). The bot therefore NEVER creates
 markets in its loop: the deploy script owns the pair's single long-lived market,
@@ -466,7 +466,7 @@ class MarketMakerBot:
         # `_final_submitted`: `is None` is the "not submitted yet" gate (step, restart
         # recovery) and the id itself is the handle `settle_settlement_quote` needs.
         self._settlement_quote_id: Optional[int] = None
-        # Current round expiry (quote-expiry model, docs/plan/one-market-per-pair-plan.md):
+        # Current round expiry (quote-expiry model, docs/sc-tech-spec.md):
         # a round is the quote expiryBlock, NOT the (inert) wrapper market expiry. Derived
         # from live quotes on startup, then advanced by `_start_round` — never createMarket.
         self._round_expiry: Optional[int] = None
@@ -871,7 +871,7 @@ class MarketMakerBot:
         """OPTIONAL one-shot ensure (AUTO_CREATE_MARKET, default OFF): create the pair's
         single long-lived market if the configured marketId holds nothing on this
         wrapper. The deploy script owns market creation in the normal flow
-        (docs/plan/one-market-per-pair-plan.md D5) — this is a self-healing fallback
+        (docs/sc-tech-spec.md) — this is a self-healing fallback
         and must never run per round."""
         if not self.auto_create:
             return
@@ -1254,7 +1254,7 @@ class MarketMakerBot:
         """One iteration of the quoting loop for THIS pair (no sleep). Split out
         from `run` so the multi-pair driver can advance every pair in turn.
 
-        ONE-MARKET-PER-PAIR (docs/plan/one-market-per-pair-plan.md): the wrapper market
+        ONE-MARKET-PER-PAIR (docs/sc-tech-spec.md): the wrapper market
         is the pair's long-lived trade target and its `expiryBlock` is inert — a round is
         defined by the QUOTE's `expiryBlock`. The round is derived from live quotes on
         startup (adopting another provider's round when we hold none) and then advanced

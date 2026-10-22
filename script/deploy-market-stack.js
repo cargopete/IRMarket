@@ -14,7 +14,7 @@
  *                                          market matches (pair/marketMaker/feeBps); created
  *                                          only if missing. The market's own expiryBlock is
  *                                          INERT: rounds are defined by the QUOTE's expiryBlock
- *                                          (docs/plan/one-market-per-pair-plan.md D1-D3).
+ *                                          (docs/sc-tech-spec.md).
  *   5. IRMarketVault                     — MVP ships exactly ONE vault (assets[0]); reused only
  *                                          if its oracle/pair bindings match this run
  *
@@ -315,7 +315,7 @@ async function main() {
     const baseC = new ethers.Contract(base.address, tokenArtifact.abi, wallet);
     await topUp(baseC, await baseC.balanceOf(addr), MINT_BASE, asset.symbol);
     await ensureApproval(baseC, oracleAddr, asset.symbol);
-    // Idempotent market reuse (D5): the registry's marketId points at a market on THIS wrapper
+    // Idempotent market reuse (deploy-owned): the registry's marketId points at a market on THIS wrapper
     // whose (pair, feeBps) still match → keep it; the round model no longer needs new markets.
     // NOTE: marketMaker is intentionally NOT matched — older registries used the deployer and
     // the fee recipient is advisory-only for the UI; a fresh market is created only when the

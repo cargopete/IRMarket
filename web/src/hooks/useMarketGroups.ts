@@ -10,7 +10,7 @@ import { useCurrentBlock } from "./useCurrentBlock";
  * One entry per asset pair (e.g. NVDA/KD) regardless of how many trading rounds exist.
  * The Market tab shows a single card per asset instead of every historical round.
  *
- * One-market-per-pair model (docs/plan/one-market-per-pair-plan.md): rounds + countdown
+ * One-market-per-pair model (docs/web-tech-design.md §4.2): rounds + countdown
  * come from QUOTE expiryBlocks, not from market.expiryBlock (inert — openLong validates
  * the quote's expiry). One shared quote batch (all pairs) drives every group, the same
  * pattern the home page already uses to mark prices.

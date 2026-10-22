@@ -7,7 +7,7 @@ import { useQuotes } from "./useQuotes";
 
 /**
  * Rounds derived from QUOTE expiryBlocks — one-market-per-pair model
- * (docs/plan/one-market-per-pair-plan.md D1/D2).
+ * (docs/web-tech-design.md §4.2).
  *
  * The wrapper market's own expiryBlock is inert (openLong validates the QUOTE's
  * expiry), so a "round" is a distinct quote expiryBlock for a pair. Quotes are one

@@ -28,7 +28,7 @@ export const QUOTE_TOKEN = QUOTE_TOKEN_RAW as `0x${string}`;
 
 // Round cadence (informational copy only — rounds are QUOTE expiryBlocks; the bot's
 // ROUND_BLOCKS=3000 defines 15 min). One market per pair; market expiryBlock is inert
-// (docs/plan/one-market-per-pair-plan.md).
+// (docs/web-tech-design.md §4.2).
 export const EXPIRY_SECONDS = Number((process.env.NEXT_PUBLIC_EXPIRY_SECONDS || String(15 * 60)).trim());
 
 export const isFullyConfigured =

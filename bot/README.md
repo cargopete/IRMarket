@@ -23,7 +23,7 @@ cp .env.example .env   # fill PRIVATE_KEY, MARKET_ID, addresses
 
 - **Quoting (FR-BOT-001)** — keeps one ACTIVE quote per round at the tracked fair price
   (per-quote `expiryBlock` = the ROUND expiry — rounds are QUOTE expiryBlocks, not markets;
-  docs/plan/one-market-per-pair-plan.md). Restocks immediately after a veto.
+  docs/sc-tech-spec.md). Restocks immediately after a veto.
 - **Settlement quote (FR-BOT-002)** — `SETTLEMENT_QUOTE_LEAD_BLOCKS` before expiry it
   submits one final quote at the current fair price, which settles LAST and becomes the
   round mark (终价, D-06).

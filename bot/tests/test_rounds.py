@@ -2,7 +2,7 @@
 
 No network: the bot object is built via `object.__new__` (skipping BotContext), the
 oracle is a stub, and `_send` records calls instead of broadcasting. Covers
-docs/plan/one-market-per-pair-plan.md §5 as merged with the settlement-window /
+docs/sc-tech-spec.md §5 as merged with the settlement-window /
 bounded-bookkeeping code on `main` (round = QUOTE expiry; the bot never creates
 markets in its loop).
 
