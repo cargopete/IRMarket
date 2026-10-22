@@ -12,7 +12,7 @@
 | Branch up to date | **required** (strict) — CI runs on the PR head, which must contain the latest `main` |
 | Force-push / branch deletion on `main` | blocked |
 | Merge method | **squash only** (merge commit / rebase disabled repo-wide) |
-| Auto-merge | enabled — `gh pr merge <n> --auto --squash` |
+| Auto-merge | **disabled** (repo setting `allow_auto_merge=false`, 2026-10-21) — merge manually once checks are green |
 | Delete branch on merge | enabled |
 
 Because checks are strict, "green on the PR" means "green on `main` + PR" — that is the
@@ -36,11 +36,13 @@ Because checks are strict, "green on the PR" means "green on `main` + PR" — th
 2. Wait for `contracts`, `web`, `bot` to pass.
 3. If `main` moved since the last run, update the branch and let CI re-run (required by the
    strict check).
-4. Enable auto-merge:
+4. Merge **manually** once `contracts`, `web` and `bot` are green:
    ```bash
-   gh pr merge <n> --auto --squash
+   gh pr merge <n> --squash
    ```
-   GitHub merges as soon as the requirements are met, then deletes the branch.
+   Auto-merge is deliberately off: CI is still being hardened, and a green run today does not
+   yet mean the combination is safe to land unattended. Re-enable it (and this row) only once
+   the checks have a track record.
 
 ## Merge order
 

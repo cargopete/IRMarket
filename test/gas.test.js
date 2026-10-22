@@ -30,9 +30,9 @@ const E18 = 10n ** 18n;
 // ---------------------------------------------------------------------------
 const BOT_GAS = {
   approve: 56_691n,
-  submit_quote: 315_413n,
+  submit_quote: 346_000n,
   settle: 72_956n,
-  withdraw: 129_367n,
+  withdraw: 150_000n,
   create_market: 218_789n,
 };
 
@@ -182,6 +182,26 @@ describe("gas limits — regression guard (Monad bills the limit, not gasUsed)",
       await oracle.connect(provider).withdrawProviderFunds(quoteId)
     ).wait();
     assertSane("withdrawProviderFunds (settled)", withdrawn, BOT_GAS.withdraw);
+  });
+
+  it("withdrawProviderFunds alone (no settle) fits the bot limit", async function () {
+    // Lazy settlement: a matured ACTIVE quote is withdrawable with no settleValidQuote
+    // tx (upstream parity — see MonoracleMock.test.js implicit-settlement cases). The
+    // bot's sweep can therefore skip the optional checkpoint entirely.
+    await market.createMarket(base.target, quote.target, mm.address, expiry, 100n);
+    const submitted = await (
+      await oracle.connect(provider).submitQuote(base.target, quote.target, E18, 100n * E18, expiry)
+    ).wait();
+    const quoteId = submitted.logs
+      .map(l => { try { return oracle.interface.parseLog(l); } catch { return null; } })
+      .find(l => l && l.name === "QuoteSubmitted").args[0];
+
+    await mineBlocks(Number(expiry - BigInt(await currentBlock())) + 1);
+
+    const withdrawn = await (
+      await oracle.connect(provider).withdrawProviderFunds(quoteId)
+    ).wait();
+    assertSane("withdrawProviderFunds (implicit settle)", withdrawn, BOT_GAS.withdraw);
   });
 
   it("direct oracle vetoes fit the web close limit", async function () {
