@@ -122,6 +122,7 @@ Monad veto-arbitrage 长/短市场：
   `script/networks.js` 同表的 chain explorer。
 - 当前链参数表：Monad testnet `10143`（0.3s/block）、Avalanche Fuji `43113`（~2s/block）、
   anvil `31337`。新链先在 `script/networks.js` + `web/src/lib/chainParams.ts` 登记，再部署。
+- Monad 与 Fuji 共用同一份 `bot/verifier.py`、不同 `.env`——现在靠 `BOT_ENV_FILE` 区分。以后重启任一服务前确认这个变量还在，否则会重现 nonce 冲突。
 
 ### TODO tracking
 - `TODO.md` is **only an index**: each item = one GH issue link + status (OPEN/DONE/blocked).
