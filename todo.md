@@ -100,4 +100,5 @@ _Tracking convention: this file is only an index — each item references a GH i
 - GH: https://github.com/dixia/IRMarket/issues/40
 - Plan: `docs/design/lp-pool-tranche-impl-plan.md`
 - Design: `docs/design/lp-pool-tranche-design.md`
-- Status: **TODO** - design + plan complete (M1 ready to start); no contract changes yet.
+- Status: **IN PROGRESS** - M1 implemented (contract + 14 tests); M2 conversions + M3 frontend/deploy pending.
+
