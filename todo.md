@@ -94,3 +94,10 @@ _Tracking convention: this file is only an index — each item references a GH i
 
 - GH: https://github.com/dixia/IRMarket/issues/35
 - Status: **OPEN** — `SinaSource`/`TencentSource` now cover `hk|sh|sz` (A-share last price = field 3); `MOUTAI` descriptor + default `ASSETS` (`NVDA` dropped) + web label; `BOT_SKIP_SYMBOLS=NVDA` stops quoting without touching the registry. Live ¥1318.49 both sources; 66/66 bot tests.
+
+## LP vault tranching: Senior/Junior share classes (design + implementation plan)
+
+- GH: https://github.com/dixia/IRMarket/issues/40
+- Plan: `docs/design/lp-pool-tranche-impl-plan.md`
+- Design: `docs/design/lp-pool-tranche-design.md`
+- Status: **TODO** - design + plan complete (M1 ready to start); no contract changes yet.
